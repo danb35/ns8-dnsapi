@@ -274,9 +274,16 @@ This is not the customer control panel: only cluster administrators can reach it
      without dnshelper, and on the test node after `update-module` from step 1: the grants and
      the new state files appeared, keys made from the shell and through the API worked, a
      disabled tenant's key was refused, a self-call making an operator key was refused, and
-     `2v6.in` was refused as not assignable (dnshelper has no rule for dnsapi there). Not tested
-     on a node: reading records from a real zone, which needs an access rule on the test node's
-     dnshelper.
+     `2v6.in` was refused as not assignable (dnshelper has no rule for dnsapi there).
+   - Real records, on the test node (2026-11-21): with a temporary "API module (all records)"
+     rule for `module/dnsapi2` on `example.com` (ns8-powerdns), removed afterwards. Two tenants:
+     the zone assigned to A, and refused to B (409 `zone_assigned`). A's read key listed the zone
+     and read its records, with the `type` filter and `propagation`; B's got an empty zone list
+     and 404 for the zone; the operator saw the zone with its tenant; `2v6.in` (no rule) was 404
+     for both; after unassigning, A got 404. dnshelper logged every call as
+     `caller="module/dnsapi2"`. Records read in about 0.47 s (`get-records` and `list-owners` in
+     parallel), propagation in 5 s. Not tested on a node: `owned_by`, because the zone had no
+     record another module wrote (the unit tests cover it).
 3. Write endpoints over `apply-changes`, `append-records`, `set-records`, `delete-records`
    (dnshelper's phase 1: released in 0.7.0).
 4. Admin UI; OpenAPI document; README with a Blesta/WHMCS-style walk-through.

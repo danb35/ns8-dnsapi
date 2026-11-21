@@ -2,70 +2,410 @@
 # Copyright (C) 2026 Dan Brown
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Run with: python3 -m unittest discover -s server/tests -t server
+# Run with: cd server && python3 -m unittest discover -s tests
 # build-images.sh runs them inside the built image.
 
 import http.client
 import json
 import logging
+import os
+import shutil
+import tempfile
 import threading
 import unittest
 
-from dnsapi_server.app import make_server
+from dnsapi_server import keys as keyfmt
+from dnsapi_server.api import Api, client_address
+from dnsapi_server.app import make_api, make_server
+from dnsapi_server.backend import Backend, TaskFailed, TaskRefused, Unavailable
+from dnsapi_server.limits import SlidingWindow
+from dnsapi_server.store import Store
+
+ZONES = [
+    {"zone": "acme.test", "credential": "c1", "provider": "cloudflare", "access": "write", "full": True},
+    {"zone": "beta.test", "credential": "c1", "provider": "cloudflare", "access": "write", "full": True},
+    {"zone": "free.test", "credential": "c1", "provider": "cloudflare", "access": "write", "full": True},
+    {"zone": "partial.test", "credential": "c1", "provider": "cloudflare", "access": "write", "full": False},
+]
+RECORDS = {
+    "acme.test": [
+        {"name": "@", "type": "MX", "ttl": 300, "data": "10 mail.acme.test."},
+        {"name": "www", "type": "A", "ttl": 300, "data": "192.0.2.1"},
+    ],
+}
+OWNERS = {
+    "acme.test": [{"name": "@", "type": "MX", "data": "10 mail.acme.test.", "callers": ["module/mail1"],
+                   "removed": [], "time": "2026-11-21T00:00:00Z"}],
+}
 
 
-class ServerTest(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
+def write_json(directory, name, data):
+    with open(os.path.join(directory, name), "w") as fp:
+        json.dump(data, fp)
+
+
+class FakeBackend(Backend):
+    """dnshelper and this module's own actions, without NS8."""
+
+    def __init__(self, store):
+        super().__init__(store)
+        self.calls = []
+        self.fail_with = None
+
+    def run(self, agent_id, action, data):
+        self.calls.append((agent_id, action, data))
+        if self.fail_with:
+            raise self.fail_with
+        state = self.store.state_dir
+        if agent_id == "module/dnshelper1":
+            if action == "list-zones":
+                return {"zones": ZONES}
+            if action == "get-records":
+                return {"records": [dict(r) for r in RECORDS.get(data["zone"], [])]}
+            if action == "list-owners":
+                return {"zone": data["zone"], "owners": OWNERS.get(data["zone"], [])}
+            if action == "check-propagation":
+                return {"zone": data["zone"], "name": data["name"], "type": data["type"],
+                        "records": [], "servers_from": "dns", "servers": []}
+        if agent_id == "module/dnsapi1":
+            tenants = json.load(open(os.path.join(state, "tenants.json")))
+            keys = json.load(open(os.path.join(state, "keys.json")))
+            if action == "add-tenant":
+                tenants["tenants"]["t00000009"] = {"name": data["name"], "enabled": True, "zones": [],
+                                                   "created": "2026-11-21T00:00:00Z"}
+                write_json(state, "tenants.json", tenants)
+                return {"id": "t00000009"}
+            if action == "assign-zone":
+                for tenant_id, tenant in tenants["tenants"].items():
+                    if data["zone"] in tenant["zones"] and tenant_id != data["tenant"]:
+                        raise TaskRefused([{"field": "zone", "error": "zone_assigned", "value": data["zone"],
+                                            "message": "the zone belongs to another tenant"}])
+                tenants["tenants"][data["tenant"]]["zones"].append(data["zone"])
+                write_json(state, "tenants.json", tenants)
+                return {}
+            if action == "create-key":
+                keys["keys"][data["id"]] = {"owner": data["owner"], "scope": data["scope"], "hash": data["hash"],
+                                            "label": data.get("label", ""), "allowlist": [], "expires": None,
+                                            "created": "2026-11-21T00:00:00Z"}
+                write_json(state, "keys.json", keys)
+                return {}
+            if action == "revoke-key":
+                del keys["keys"][data["id"]]
+                write_json(state, "keys.json", keys)
+                return {}
+        raise TaskFailed(f"unexpected {agent_id} {action}")
+
+
+class ApiTest(unittest.TestCase):
+    def setUp(self):
         logging.disable(logging.CRITICAL)
-        cls.server = make_server("127.0.0.1", 0)
-        cls.port = cls.server.server_address[1]
-        cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
-        cls.thread.start()
+        self.dir = tempfile.mkdtemp()
+        self.usage = os.path.join(self.dir, "usage")
+        os.mkdir(self.usage)
+        with open(os.path.join(self.dir, "agent.env"), "w") as fp:
+            fp.write("PATH=/x\nREDIS_USER=module/dnsapi1\nREDIS_PASSWORD=secret\n")
+        write_json(self.dir, "runtime.json", {"dnshelper": "module/dnshelper1", "proxies_depth": 0})
+        write_json(self.dir, "settings.json", {"host": "api.test", "rate_limit": 60})
+        write_json(self.dir, "tenants.json", {"tenants": {
+            "t00000001": {"name": "Acme", "enabled": True, "zones": ["acme.test"], "created": None},
+            "t00000002": {"name": "Beta", "enabled": True, "zones": ["beta.test"], "created": None},
+            "t00000003": {"name": "Off", "enabled": False, "zones": [], "created": None},
+        }})
+        self.keys = {}
+        records = {}
+        for name, owner, scope, extra in [
+            ("operator", "operator", "write", {}),
+            ("operator_ro", "operator", "read", {}),
+            ("acme", "t00000001", "write", {}),
+            ("acme_ro", "t00000001", "read", {}),
+            ("beta", "t00000002", "write", {}),
+            ("off", "t00000003", "write", {}),
+            ("expired", "operator", "write", {"expires": "2020-01-01T00:00:00Z"}),
+            ("fenced", "operator", "write", {"allowlist": ["203.0.113.0/24"]}),
+        ]:
+            key_id, key, key_hash = keyfmt.new_key()
+            self.keys[name] = key
+            records[key_id] = {"owner": owner, "scope": scope, "hash": key_hash, "label": name,
+                               "allowlist": [], "expires": None, "created": None, **extra}
+        write_json(self.dir, "keys.json", {"keys": records})
 
-    @classmethod
-    def tearDownClass(cls):
-        cls.server.shutdown()
-        cls.server.server_close()
+        store = Store(self.dir, self.usage)
+        self.backend = FakeBackend(store)
+        self.api = Api(store, self.backend, SlidingWindow(60.0), SlidingWindow(60.0))
+        self.server = make_server("127.0.0.1", 0, self.api)
+        self.port = self.server.server_address[1]
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.server.server_close()
+        shutil.rmtree(self.dir)
         logging.disable(logging.NOTSET)
 
-    def request(self, method, path, body=None):
+    def request(self, method, path, key=None, body=None, headers=None, raw=None):
         conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        hdrs = dict(headers or {})
+        if key:
+            hdrs["Authorization"] = "Bearer " + self.keys.get(key, key)
+        data = raw if raw is not None else (json.dumps(body).encode() if body is not None else None)
+        if data is not None:
+            hdrs["Content-Type"] = "application/json"
         try:
-            conn.request(method, path, body=body)
+            conn.request(method, path, body=data, headers=hdrs)
             resp = conn.getresponse()
-            raw = resp.read()
-            return resp, (json.loads(raw) if raw else None)
+            payload = resp.read()
+            return resp, (json.loads(payload) if payload else None)
         finally:
             conn.close()
 
-    def test_status(self):
+    def assertError(self, resp, body, status, code):
+        self.assertEqual(resp.status, status, body)
+        self.assertEqual(body["error"]["code"], code)
+
+    # status and plumbing
+
+    def test_status_needs_no_key(self):
         resp, body = self.request("GET", "/v1/status")
         self.assertEqual(resp.status, 200)
         self.assertEqual(body, {"status": "ok"})
-        self.assertEqual(resp.getheader("Content-Type"), "application/json")
         self.assertEqual(resp.getheader("Server"), "dnsapi")
 
-    def test_status_query_string(self):
-        resp, body = self.request("GET", "/v1/status?x=1")
-        self.assertEqual(resp.status, 200)
-
-    def test_head(self):
+    def test_status_head_and_method(self):
         resp, body = self.request("HEAD", "/v1/status")
         self.assertEqual(resp.status, 200)
-        self.assertIsNone(body)
-
-    def test_unknown_path(self):
-        resp, body = self.request("GET", "/v1/nothing")
-        self.assertEqual(resp.status, 404)
-        self.assertEqual(body["error"]["code"], "not_found")
-        self.assertIn("field", body["error"])
-
-    def test_wrong_method(self):
-        resp, body = self.request("POST", "/v1/status", body=b"{}")
-        self.assertEqual(resp.status, 405)
-        self.assertEqual(body["error"]["code"], "method_not_allowed")
+        resp, body = self.request("POST", "/v1/status", body={})
+        self.assertError(resp, body, 405, "method_not_allowed")
         self.assertEqual(resp.getheader("Allow"), "GET, HEAD")
+
+    def test_unknown_path_needs_a_key_first(self):
+        resp, body = self.request("GET", "/v1/nothing")
+        self.assertError(resp, body, 401, "missing_key")
+        resp, body = self.request("GET", "/v1/nothing", "operator")
+        self.assertError(resp, body, 404, "not_found")
+
+    def test_body_limits(self):
+        resp, body = self.request("POST", "/v1/tenants", "operator", raw=b"{not json")
+        self.assertError(resp, body, 400, "invalid_json")
+        # Refused from the Content-Length, before the body is read.
+        import socket
+        with socket.create_connection(("127.0.0.1", self.port), timeout=5) as sock:
+            sock.sendall(("POST /v1/tenants HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer %s\r\n"
+                          "Content-Length: %d\r\n\r\n" % (self.keys["operator"], 1024 * 1024 + 1)).encode())
+            chunks = []
+            while True:  # the server closes the connection after a 413
+                chunk = sock.recv(65536)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+            reply = b"".join(chunks).decode()
+        self.assertTrue(reply.startswith("HTTP/1.1 413"), reply)
+        self.assertIn('"body_too_large"', reply)
+
+    # authentication
+
+    def test_bad_keys(self):
+        resp, body = self.request("GET", "/v1/zones", "dnsapi_00000000_" + "a" * 52)
+        self.assertError(resp, body, 401, "invalid_key")
+        self.assertIn("Bearer", resp.getheader("WWW-Authenticate"))
+        wrong_secret = self.keys["acme"][:-1] + ("a" if self.keys["acme"][-1] != "a" else "b")
+        resp, body = self.request("GET", "/v1/zones", wrong_secret)
+        self.assertError(resp, body, 401, "invalid_key")
+        resp, body = self.request("GET", "/v1/zones", "not-a-key")
+        self.assertError(resp, body, 401, "invalid_key")
+
+    def test_expired_disabled_and_fenced_keys(self):
+        resp, body = self.request("GET", "/v1/zones", "expired")
+        self.assertError(resp, body, 401, "key_expired")
+        resp, body = self.request("GET", "/v1/zones", "off")
+        self.assertError(resp, body, 403, "tenant_disabled")
+        resp, body = self.request("GET", "/v1/tenants", "fenced")
+        self.assertError(resp, body, 403, "address_not_allowed")
+        resp, body = self.request("GET", "/v1/tenants", "fenced", headers={"X-Forwarded-For": "203.0.113.7"})
+        self.assertEqual(resp.status, 200, body)
+
+    def test_brute_force_throttle(self):
+        for _ in range(10):
+            resp, body = self.request("GET", "/v1/zones", "dnsapi_00000000_" + "a" * 52)
+            self.assertEqual(resp.status, 401)
+        resp, body = self.request("GET", "/v1/zones", "operator")
+        self.assertError(resp, body, 429, "rate_limited")
+        self.assertTrue(int(resp.getheader("Retry-After")) > 0)
+        # another address is not affected
+        resp, body = self.request("GET", "/v1/tenants", "operator", headers={"X-Forwarded-For": "198.51.100.1"})
+        self.assertEqual(resp.status, 200)
+
+    def test_client_address(self):
+        self.assertEqual(client_address("127.0.0.1", ["203.0.113.5"], 0), "203.0.113.5")
+        self.assertEqual(client_address("127.0.0.1", ["198.51.100.9, 203.0.113.5"], 1), "198.51.100.9")
+        self.assertEqual(client_address("127.0.0.1", ["1.1.1.1, 198.51.100.9, 203.0.113.5"], 1), "198.51.100.9")
+        self.assertEqual(client_address("127.0.0.1", ["203.0.113.5"], 3), "203.0.113.5")
+        self.assertEqual(client_address("127.0.0.1", [], 0), "127.0.0.1")
+        # only a request from Traefik on loopback is trusted to carry the header
+        self.assertEqual(client_address("192.0.2.50", ["203.0.113.5"], 0), "192.0.2.50")
+
+    def test_last_used_is_recorded(self):
+        self.request("GET", "/v1/tenants", "operator")
+        self.api.store.flush_usage()
+        used = json.load(open(os.path.join(self.usage, "last-used.json")))
+        self.assertEqual(len(used), 1)
+
+    # zones and records
+
+    def test_operator_zones(self):
+        resp, body = self.request("GET", "/v1/zones", "operator")
+        self.assertEqual(resp.status, 200, body)
+        zones = {z["zone"]: z["tenant"] for z in body["zones"]}
+        self.assertEqual(zones, {"acme.test": "t00000001", "beta.test": "t00000002", "free.test": None})
+
+    def test_tenant_zones(self):
+        resp, body = self.request("GET", "/v1/zones", "acme_ro")
+        self.assertEqual(resp.status, 200, body)
+        self.assertEqual([z["zone"] for z in body["zones"]], ["acme.test"])
+        self.assertNotIn("tenant", body["zones"][0])
+
+    def test_zone_list_is_cached(self):
+        self.request("GET", "/v1/zones", "acme")
+        self.request("GET", "/v1/zones", "beta")
+        self.assertEqual(sum(1 for c in self.backend.calls if c[1] == "list-zones"), 1)
+
+    def test_records_with_owners(self):
+        resp, body = self.request("GET", "/v1/zones/acme.test/records", "acme_ro")
+        self.assertEqual(resp.status, 200, body)
+        mx = [r for r in body["records"] if r["type"] == "MX"][0]
+        www = [r for r in body["records"] if r["type"] == "A"][0]
+        self.assertEqual(mx["owned_by"], ["mail1"])
+        self.assertNotIn("owned_by", www)
+
+    def test_records_filters_are_passed(self):
+        self.request("GET", "/v1/zones/acme.test/records?name=www&type=A", "acme")
+        call = [c for c in self.backend.calls if c[1] == "get-records"][0]
+        self.assertEqual(call[2], {"zone": "acme.test", "name": "www", "type": "A"})
+
+    def test_tenant_isolation_is_404(self):
+        for path in ("/v1/zones/beta.test/records", "/v1/zones/free.test/records",
+                     "/v1/zones/nothere.test/records", "/v1/zones/beta.test/propagation?name=www&type=A"):
+            resp, body = self.request("GET", path, "acme")
+            self.assertError(resp, body, 404, "zone_not_found")
+        self.assertFalse([c for c in self.backend.calls if c[1] in ("get-records", "check-propagation")])
+
+    def test_operator_reaches_only_full_zones(self):
+        resp, body = self.request("GET", "/v1/zones/free.test/records", "operator")
+        self.assertEqual(resp.status, 200)
+        resp, body = self.request("GET", "/v1/zones/partial.test/records", "operator")
+        self.assertError(resp, body, 404, "zone_not_found")
+
+    def test_propagation(self):
+        resp, body = self.request("GET", "/v1/zones/acme.test/propagation?name=www&type=A", "acme_ro")
+        self.assertEqual(resp.status, 200, body)
+        resp, body = self.request("GET", "/v1/zones/acme.test/propagation?name=www", "acme_ro")
+        self.assertError(resp, body, 400, "invalid_request")
+
+    def test_dnshelper_missing(self):
+        write_json(self.dir, "runtime.json", {"dnshelper": None, "proxies_depth": 0})
+        os.utime(os.path.join(self.dir, "runtime.json"), (1, 1))
+        resp, body = self.request("GET", "/v1/zones", "acme")
+        self.assertError(resp, body, 503, "dnshelper_missing")
+
+    def test_upstream_errors(self):
+        self.backend.fail_with = Unavailable("down")
+        resp, body = self.request("GET", "/v1/zones", "acme")
+        self.assertError(resp, body, 503, "unavailable")
+        self.api.zones_cache = None
+        self.backend.fail_with = TaskFailed("x")
+        resp, body = self.request("GET", "/v1/zones", "acme")
+        self.assertError(resp, body, 502, "upstream_error")
+        self.backend.fail_with = TaskRefused([{"field": "zone", "error": "not_permitted", "message": "no rule"}])
+        resp, body = self.request("GET", "/v1/zones", "acme")
+        self.assertError(resp, body, 403, "not_permitted")
+
+    def test_rate_limit(self):
+        write_json(self.dir, "settings.json", {"rate_limit": 3})
+        os.utime(os.path.join(self.dir, "settings.json"), (2, 2))
+        statuses = [self.request("GET", "/v1/zones/acme.test/records", "acme")[0].status for _ in range(2)]
+        self.assertEqual(statuses, [200, 429])  # 1 list-zones + 2 per records read, then refused
+        resp, body = self.request("GET", "/v1/zones", "beta")
+        self.assertEqual(resp.status, 200)  # the limit is per key
+
+    # tenants (operator)
+
+    def test_tenant_endpoints_hidden_from_tenants(self):
+        resp, body = self.request("GET", "/v1/tenants", "acme")
+        self.assertError(resp, body, 404, "not_found")
+
+    def test_read_scope(self):
+        resp, body = self.request("POST", "/v1/tenants", "operator_ro", body={"name": "X"})
+        self.assertError(resp, body, 403, "insufficient_scope")
+        resp, body = self.request("GET", "/v1/tenants", "operator_ro")
+        self.assertEqual(resp.status, 200)
+
+    def test_add_tenant_calls_own_action(self):
+        resp, body = self.request("POST", "/v1/tenants", "operator", body={"name": "Gamma", "zones": ["x"]})
+        self.assertEqual(resp.status, 201, body)
+        self.assertEqual(body["id"], "t00000009")
+        self.assertEqual(body["name"], "Gamma")
+        call = self.backend.calls[-1]
+        self.assertEqual(call, ("module/dnsapi1", "add-tenant", {"name": "Gamma"}))
+
+    def test_get_tenant(self):
+        resp, body = self.request("GET", "/v1/tenants/t00000001", "operator")
+        self.assertEqual(body["zones"], ["acme.test"])
+        resp, body = self.request("GET", "/v1/tenants/t99999999", "operator")
+        self.assertError(resp, body, 404, "tenant_not_found")
+
+    def test_assign_conflict(self):
+        resp, body = self.request("PUT", "/v1/tenants/t00000002/zones/acme.test", "operator")
+        self.assertError(resp, body, 409, "zone_assigned")
+        resp, body = self.request("PUT", "/v1/tenants/t00000002/zones/free.test", "operator")
+        self.assertEqual(resp.status, 200, body)
+        self.assertEqual(body["zones"], ["beta.test", "free.test"])
+
+    def test_create_and_revoke_tenant_key(self):
+        resp, body = self.request("POST", "/v1/tenants/t00000002/keys", "operator",
+                                  body={"scope": "read", "label": "beta script"})
+        self.assertEqual(resp.status, 201, body)
+        key = body["key"]
+        self.assertTrue(key.startswith("dnsapi_" + body["id"] + "_"))
+        call = self.backend.calls[-1]
+        self.assertEqual(call[1], "create-key")
+        self.assertNotIn(key, json.dumps(call[2]))  # only the hash is sent
+        self.assertEqual(call[2]["hash"], keyfmt.hash_key(key))
+        resp, zones = self.request("GET", "/v1/zones", key)
+        self.assertEqual([z["zone"] for z in zones["zones"]], ["beta.test"])
+        resp, listed = self.request("GET", "/v1/tenants/t00000002/keys", "operator")
+        self.assertIn(body["id"], [k["id"] for k in listed["keys"]])
+        self.assertNotIn("hash", json.dumps(listed))
+        resp, _ = self.request("DELETE", f"/v1/tenants/t00000002/keys/{body['id']}", "operator")
+        self.assertEqual(resp.status, 204)
+        resp, again = self.request("GET", "/v1/zones", key)
+        self.assertError(resp, again, 401, "invalid_key")
+
+    def test_revoke_other_tenants_key(self):
+        acme_id = keyfmt.parse_key(self.keys["acme"])
+        resp, body = self.request("DELETE", f"/v1/tenants/t00000002/keys/{acme_id}", "operator")
+        self.assertError(resp, body, 404, "key_not_found")
+
+
+class StoreTest(unittest.TestCase):
+    def test_credentials_only_redis(self):
+        directory = tempfile.mkdtemp()
+        try:
+            with open(os.path.join(directory, "agent.env"), "w") as fp:
+                fp.write("PATH=/bad\nREDIS_USER=module/dnsapi7\nREDIS_PASSWORD=p=w\nPYTHONPATH=/bad\n")
+            api = make_api(directory)
+            self.assertEqual(api.store.credentials(), ("module/dnsapi7", "p=w"))
+            self.assertEqual(api.backend.agent_id(), "module/dnsapi7")
+        finally:
+            shutil.rmtree(directory)
+
+
+class KeyTest(unittest.TestCase):
+    def test_format(self):
+        key_id, key, key_hash = keyfmt.new_key()
+        self.assertEqual(keyfmt.parse_key(key), key_id)
+        self.assertEqual(len(key), len("dnsapi_") + 8 + 1 + 52)
+        self.assertTrue(keyfmt.hash_matches(key, key_hash))
+        self.assertFalse(keyfmt.hash_matches(key, "0" * 64))
+        self.assertIsNone(keyfmt.parse_key("dnsapi_ABCDEF12_" + "a" * 52))
 
 
 if __name__ == "__main__":

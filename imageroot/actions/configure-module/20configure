@@ -24,7 +24,7 @@ import agent
 import agent.tasks
 
 SETTINGS = "settings.json"
-DEFAULTS = {"host": None, "lets_encrypt": False, "http2https": True, "ip_allowlist": []}
+DEFAULTS = {"host": None, "lets_encrypt": False, "http2https": True, "ip_allowlist": [], "rate_limit": 60}
 
 
 def validation_failed(field, value, error):

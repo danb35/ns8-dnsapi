@@ -1,0 +1,36 @@
+#!/usr/bin/env python3
+
+#
+# Copyright (C) 2026 Dan Brown
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+
+# The zones that can be given to tenants, with the tenant each one has.
+# "error" explains an empty list: no dnshelper, dnshelper too old, or
+# dnshelper not answering.
+
+import json
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.environ["AGENT_INSTALL_DIR"], "pypkg"))
+from dnsapi import state
+
+import agent
+from dnsapi import dnshelper
+
+rdb = agent.redis_connect(use_replica=True)
+target = dnshelper.find_instance(rdb)
+result = {"dnshelper": target.split("/", 1)[1] if target else None, "zones": [], "error": None}
+if target is None:
+    result["error"] = "dnshelper_missing"
+else:
+    try:
+        full = dnshelper.full_zones(target)
+    except dnshelper.DnshelperError as exc:
+        result["error"] = exc.code
+        full = {}
+    tenants = state.tenants()
+    result["zones"] = [{"zone": z, "provider": full[z], "tenant": state.zone_owner(tenants, z)}
+                       for z in sorted(full)]
+json.dump(result, fp=sys.stdout)

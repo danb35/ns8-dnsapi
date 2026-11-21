@@ -9,6 +9,16 @@
 # container. It listens on 127.0.0.1 only; Traefik routes the API host name
 # to it (configure-module).
 #
+# --network=host: the service calls NS8 tasks on the api-server at
+# cluster-leader:9311, which is 127.0.0.1 on the leader node, unreachable
+# from a separate network namespace. It binds 127.0.0.1:${TCP_PORT} itself.
+#
+# --userns=keep-id --user %U:%U: the container runs as the module's own uid,
+# so it can read the 0600 state files the actions write, agent.env (the
+# module's api-server credentials) among them. The state directory is
+# mounted read-only, whole, because the actions replace files by renaming;
+# usage/ is the only place the service writes (the keys' last-used times).
+#
 [Unit]
 Description=dnsapi API server
 Wants=network-online.target
@@ -23,15 +33,21 @@ TimeoutStopSec=70
 # podman stop sends SIGTERM; conmon then exits 143 (137 after SIGKILL).
 SuccessExitStatus=143 137
 ExecStartPre=/bin/rm -f %t/dnsapi.pid %t/dnsapi.ctr-id
+ExecStartPre=/bin/mkdir -p %E/state/usage
+ExecStartPre=-runagent discover-runtime
 ExecStart=/usr/bin/podman run \
     --detach \
     --conmon-pidfile=%t/dnsapi.pid \
     --cidfile=%t/dnsapi.ctr-id \
     --cgroups=no-conmon \
     --replace --name=%N \
-    --publish=127.0.0.1:${TCP_PORT}:8080 \
+    --network=host \
+    --userns=keep-id --user=%U:%G \
     --read-only \
-    ${DNSAPI_SERVER_IMAGE}
+    --volume=%E/state:/srv/state:ro,Z \
+    --volume=%E/state/usage:/srv/usage:Z \
+    ${DNSAPI_SERVER_IMAGE} \
+    --host=127.0.0.1 --port=${TCP_PORT}
 # podman run --detach returns once the container exists, before the service
 # listens: hold the start until it answers, so configure-module returns a
 # working API.

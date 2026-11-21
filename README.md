@@ -10,8 +10,9 @@ See [DESIGN.md](DESIGN.md) for the design.
 
 ## Status
 
-Step 1 of DESIGN.md's build order: the API service runs behind Traefik on its own host name and
-answers `GET /v1/status`. Tenants, keys and the DNS endpoints are not built yet.
+Steps 1 and 2 of DESIGN.md's build order: the API runs behind Traefik on its own host name, with
+tenants, API keys, rate limits and the read endpoints. Changing records (step 3) and the admin UI
+pages for tenants and keys (step 4) are not built yet.
 
 ## Install
 
@@ -37,6 +38,8 @@ with a DNS record pointing to the node:
 - `http2https`: redirect plain HTTP to HTTPS. Default `true`.
 - `ip_allowlist`: IP addresses or CIDR networks that Traefik lets through, for example only the
   billing server. Empty allows every address. Default empty.
+- `rate_limit`: DNS requests per minute for each key. Every request that calls dnshelper counts,
+  reads too, since the DNS hosts' own limits count them. Default 60.
 
 An omitted field keeps its current value. The settings are in `state/settings.json`, which is
 backed up. Check the service:
@@ -44,6 +47,47 @@ backed up. Check the service:
     curl https://dnsapi.example.com/v1/status
 
 which answers `{"status": "ok"}`.
+
+## Give dnsapi zones
+
+dnsapi can hand a tenant only a zone that dnshelper lets it write in full. On dnshelper's Access
+page, add a rule for `module/dnsapi1` with the "API module (all records)" preset on the zones the
+API may manage. Then:
+
+    api-cli run module/dnsapi1/list-assignable-zones
+
+## Keys
+
+Keys look like `dnsapi_<id>_<secret>` and are shown once, when they are made: only their SHA-256
+is stored. Make the first operator key (the one a billing portal uses) from a shell on the node:
+
+    runagent -m dnsapi1 create-key --owner operator --scope write --label "billing portal"
+
+`--allowlist 203.0.113.10,198.51.100.0/24` limits where it may be used from, `--expires
+2027-12-31T00:00:00Z` when. `api-cli run module/dnsapi1/list-keys` lists the keys and when each
+was last used; `api-cli run module/dnsapi1/revoke-key --data '{"id": "<key id>"}'` revokes one.
+
+## API
+
+Send the key as `Authorization: Bearer <key>`. Errors are `{"error": {"code", "message",
+"field"}}`. A read key may only `GET`.
+
+| Request | Key | |
+|---|---|---|
+| `GET /v1/status` | none | liveness |
+| `GET /v1/zones` | any | the key's zones (operator: every assignable zone, with its tenant) |
+| `GET /v1/zones/{zone}/records?name=&type=` | any | the records; those another module wrote carry `owned_by` |
+| `GET /v1/zones/{zone}/propagation?name=&type=` | any | what the zone's name servers answer |
+| `GET`, `POST /v1/tenants` | operator | list, add (`{"name"}`) |
+| `GET`, `PATCH`, `DELETE /v1/tenants/{id}` | operator | read, change (`{"name", "enabled"}`), remove with its keys |
+| `PUT`, `DELETE /v1/tenants/{id}/zones/{zone}` | operator | assign, unassign a zone |
+| `GET`, `POST /v1/tenants/{id}/keys` | operator | list, make a tenant key (`{"scope", "label", "allowlist", "expires"}`); the response has the key |
+| `DELETE /v1/tenants/{id}/keys/{key id}` | operator | revoke |
+
+A tenant key gets 404 for a zone it does not own. Too many requests give 429 with `Retry-After`.
+Calls that reach the DNS host can take as long as the host does (Hetzner: 8 to 15 s); allow 60 s.
+
+    curl -H "Authorization: Bearer $KEY" https://dnsapi.example.com/v1/zones
 
 ## Development
 

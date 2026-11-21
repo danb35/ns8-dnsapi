@@ -2,13 +2,17 @@
     "$schema": "http://json-schema.org/draft-07/schema#",
     "title": "configure-module input",
     "$id": "http://schema.nethserver.org/dnsapi/configure-module-input.json",
-    "description": "Configure dnsapi: the host name the API is published on, its certificate and HTTP redirect, and the client addresses Traefik lets through. An omitted field keeps its current value; host is required until it has been set once.",
+    "description": "Configure dnsapi: the host name the API is published on, its certificate and HTTP redirect, the client addresses Traefik lets through, and the per-key rate limit. An omitted field keeps its current value; host is required until it has been set once.",
     "examples": [
         {
             "host": "dnsapi.example.com",
             "lets_encrypt": true,
             "http2https": true,
-            "ip_allowlist": ["203.0.113.10", "198.51.100.0/24"]
+            "ip_allowlist": [
+                "203.0.113.10",
+                "198.51.100.0/24"
+            ],
+            "rate_limit": 60
         },
         {
             "ip_allowlist": []
@@ -46,6 +50,13 @@
                 "minLength": 1,
                 "maxLength": 64
             }
+        },
+        "rate_limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10000,
+            "title": "Rate limit",
+            "description": "DNS requests per minute for each API key: every request that calls dnshelper counts, reads included, because the DNS hosts' own limits count them too. Default 60."
         }
     }
 }

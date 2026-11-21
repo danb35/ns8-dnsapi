@@ -1,0 +1,28 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "add-tenant input",
+    "$id": "http://schema.nethserver.org/dnsapi/add-tenant-input.json",
+    "description": "Add a tenant",
+    "examples": [
+        {
+            "name": "Acme Ltd"
+        }
+    ],
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+        "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "pattern": "\\S",
+            "description": "Display name"
+        },
+        "enabled": {
+            "type": "boolean"
+        }
+    },
+    "required": [
+        "name"
+    ]
+}

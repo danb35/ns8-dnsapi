@@ -10,8 +10,9 @@ The dnshelper side is in
 "Delegated access for an API module". Items marked **VERIFY** were not confirmed from the sources
 or on a node.
 
-Status: build order step 1 is done (the service, its Traefik route and `GET /v1/status`); the rest
-is design. dnshelper's side, phase 1, is released in dnshelper 0.7.0 (2026-11-21), which this
+Status: build order steps 1 and 2 are done (the service and its route; tenants, keys,
+authentication, rate limits and the read endpoints); the write endpoints and the admin UI are
+design. dnshelper's side, phase 1, is released in dnshelper 0.7.0 (2026-11-21), which this
 module needs at least.
 
 Origin: forum request, community.nethserver.org topic 28774, posts 32-37 (2026-11-18/20).
@@ -99,15 +100,22 @@ Phase 2 adds `POST /v1/zones` (add a domain with a provider and credentials) and
   ns8-traefik since 3.0.0, verified in its `set-route` schema), so an operator whose only client is
   their billing server can close the API to everyone else at Traefik. The service listens on
   127.0.0.1 on a port from `org.nethserver.tcp-ports-demand`.
-- **Per-key IP allowlist:** enforced by the service, using the client address Traefik forwards
-  (`X-Forwarded-For` / `X-Real-Ip`). The header is trusted only on requests from Traefik.
-  **VERIFY** which header ns8-traefik sets, and that a client cannot inject one.
+- **Per-key IP allowlist:** enforced by the service, using the client address Traefik forwards.
+  Verified on the test node (2026-11-21, ns8-traefik 4.2.5): with no trusted proxies, Traefik
+  drops a client's `X-Forwarded-For` and `X-Real-Ip` and sends its own peer's address in both, so
+  a client cannot inject one. With trusted proxies (`set-trusted-proxies`, `PROXIES_DEPTH`), the
+  client is `PROXIES_DEPTH` entries left of the last one in `X-Forwarded-For`; dnsapi reads the
+  depth from Traefik's environment (`bin/discover-runtime`) at start and on events, so a change of
+  trusted proxies needs a restart of the service. The header is used only on requests from
+  loopback (Traefik).
 - **Brute force:** keys are random, so guessing is not the realistic risk, but failed
   authentications are still counted per source address and throttled (429 with `Retry-After`), and
   logged.
-- **Rate limits** per key, configurable, default 60 changes per minute. They protect the DNS
-  hosts' own limits, which are shared by every user of a credential (GoDaddy is about 60 per
-  minute).
+- **Rate limits** per key, configurable (`rate_limit`), default 60 per minute. They protect the
+  DNS hosts' own limits, which are shared by every user of a credential (GoDaddy is about 60 per
+  minute). Decision (2026-11-21): every dnshelper call counts, reads included, because a read is a
+  provider call too; a records read is two (`get-records` and `list-owners`). The list of
+  assignable zones is cached for 30 s.
 - **Limits:** request body at most 1 MB; at most 100 records per change (dnshelper's limit).
 - **No CORS** by default: the API is for servers, not browsers. This becomes a setting if the
   customer control panel is built as a browser app on another origin.
@@ -138,6 +146,14 @@ Phase 2 adds `POST /v1/zones` (add a domain with a provider and credentials) and
 - One rootless container, the API service. State is written by actions (admin UI) and read by
   the service, which reloads when the files change. The service itself writes only last-used
   times; it keeps rate counters in memory.
+  - The operator endpoints that change tenants, assignments and keys call this module's own
+    actions through its `selfadm` role (`create-module/10grants`, and `update-module.d/10grants`
+    for existing installs), so the actions stay the only writers. The service may make and revoke
+    tenant keys only: `create-key` and `revoke-key` refuse operator keys when the caller is the
+    module itself.
+  - The container runs with `--network=host` (the api-server is `127.0.0.1` on the leader node),
+    as the module's uid (`--userns=keep-id`), with the state directory mounted read-only and
+    `state/usage/` writable for the last-used times.
 - **Calling dnshelper from a long-running process.** `agent.tasks.run()` logs in to the api-server
   (`http://cluster-leader:9311`, `POST /api/login`, then `/api/<agent>/tasks` and `/ws`) with
   `REDIS_USER` / `REDIS_PASSWORD` from the environment. For a rootless module those come from
@@ -147,19 +163,29 @@ Phase 2 adds `POST /v1/zones` (add a domain with a provider and credentials) and
   1. A Python service using ns8-core's `agent` package, run with the agent environment.
   2. A service in any language that implements the api-server's task protocol itself.
 
-  Option 1 is less code. Either way, the process that faces the internet holds the module's
-  api-server credentials. Splitting it into a front end without credentials and a local back end
-  that holds them is possible, but probably not worth it in v1: the blast radius is the same
-  dnswriter role.
-  **VERIFY** on a node: that a service unit can load agent.env and reach `cluster-leader:9311`
-  from inside the container (host network?), and the token cache (`AGENT_STATE_DIR/apitoken.cache`)
-  when a service and actions share it.
+  Either way, the process that faces the internet holds the module's api-server credentials.
+  Splitting it into a front end without credentials and a local back end that holds them is
+  possible, but probably not worth it in v1: the blast radius is the same dnswriter role.
+
+  Decision (2026-11-21): option 2. The protocol is three HTTP calls (login, `POST
+  /api/<agent>/tasks`, then `GET /api/<agent>/task/<id>/status` until it stops answering 400 or
+  404), done with the standard library (`server/dnsapi_server/backend.py`), so the image needs no
+  aiohttp and no copy of ns8-core's agent package. Verified on the test node: a container on the
+  host network logs in as `module/dnsapi2` with the credentials read from a read-only
+  `agent.env` (only `REDIS_USER` and `REDIS_PASSWORD`; the file also sets `PATH` and
+  `PYTHONPATH`, so it cannot be an env-file), and dnshelper applies its policy to that caller. The
+  service keeps its token in memory and logs in again on 401; it does not share `apitoken.cache`
+  with the actions.
 - **Latency:** every API call is an NS8 task (process start, dnshelper's Python step, Go helper,
-  provider call). **VERIFY** the overhead; expect about 1 s plus the provider's own time (Hetzner
-  takes 8-15 s). The API is synchronous with a generous upstream timeout, and the docs tell clients
+  provider call). Measured on the test node (2026-11-21): login 0.08 s; a `list-zones` task 0.07 s
+  to 0.4 s; a request answered from the state 0.03 s. Calls that reach the provider add the
+  provider's own time (Hetzner takes 8-15 s). The API is synchronous with a generous upstream timeout, and the docs tell clients
   to allow 60 s.
 - **Discovery:** dnshelper through `agent.list_service_providers(rdb, 'dnshelper')`, as every
-  consumer does. The API is unavailable (503) while dnshelper is missing.
+  consumer does, by install order when there are several. The service cannot read Redis, so
+  `bin/discover-runtime` writes `state/runtime.json` (`dnshelper`, `proxies_depth`) before the
+  service starts, from `configure-module`, and on `service-dnshelper-changed`, `module-added` and
+  `module-removed`. The API answers 503 `dnshelper_missing` while dnshelper is missing.
 - **dnshelper older than 0.7.0** returns no `access`/`full` from `list-zones` and has no
   `apply-changes` in `dnswriter`. dnsapi then offers no zones, and the Status page says that
   dnshelper needs updating, rather than guessing what the old rules allow.
@@ -176,13 +202,22 @@ Phase 2 adds `POST /v1/zones` (add a domain with a provider and credentials) and
     instance's policy is default deny until its administrator adds a rule for dnsapi.
   - With more than one dnshelper, dnsapi uses the one discovery finds first (open question 7).
 - State (all in `state-include.conf`): `state/tenants.json` (tenants and zone assignments),
-  `state/keys.json` (key ids, hashes, scopes, allowlists, mode 0600), `state/settings.json`.
-  Secrets are never in `state/environment`. A restore brings keys back as they were, so restored
-  keys keep working.
+  `state/keys.json` (key ids, hashes, scopes, allowlists), `state/settings.json`; all mode 0600
+  and replaced atomically under a lock (`pypkg/dnsapi/state.py`). Not backed up, because they are
+  recomputed or unimportant: `state/runtime.json` and `state/usage/last-used.json`. Secrets are
+  never in `state/environment`. A restore brings keys back as they were, so restored keys keep
+  working.
+- **No key secret is stored anywhere**, Redis included. Decision (2026-11-21): `create-key` takes
+  the key id and the SHA-256 of the key, not the key. The API service makes a tenant key's secret
+  itself and returns it in its response; the admin UI will make it in the browser; from a shell,
+  `runagent -m dnsapi1 create-key --owner operator --scope write` makes one and prints it. That
+  is how the first operator key is made. An NS8 task's input and output stay in Redis, so an
+  action that returned the key would have left it there.
 - Actions (admin UI): `configure-module` (host name, Let's Encrypt, Traefik IP allowlist, rate
   limits), `get-configuration`, `list-tenants`, `add-tenant`, `update-tenant`, `remove-tenant`,
-  `assign-zone`, `unassign-zone`, `list-assignable-zones`, `create-key` (returns the key once),
-  `revoke-key`, `list-keys`.
+  `assign-zone`, `unassign-zone`, `list-assignable-zones`, `create-key` (takes the hash, see
+  above), `revoke-key`, `list-keys`. Operator keys are made only by a cluster administrator; the
+  API has no endpoint for them.
 - Events: on dnshelper's `service-dnshelper-changed`, drop assignments of zones dnshelper no longer
   manages, or that dnsapi may no longer write. Log it; never fail.
 - `destroy-module`: nothing to do for the route. Its instance name is `MODULE_ID`, and ns8-traefik's
@@ -222,7 +257,33 @@ This is not the customer control panel: only cluster administrators can reach it
      brought every setting back in a new instance on a new port, `50call-configure-module`
      recreated the route, and removing the old instance removed its route. That confirms
      ns8-traefik's clean-up by `MODULE_ID`, so `destroy-module` needs nothing for the route.
-2. Tenants, keys, authentication, rate limits; the read endpoints.
+2. Tenants, keys, authentication, rate limits; the read endpoints. **Done** (2026-11-21):
+   - Endpoints: `GET /v1/zones`, `GET /v1/zones/{zone}/records` (`name`, `type` filters; records
+     another module wrote carry `owned_by`), `GET /v1/zones/{zone}/propagation`, and the operator
+     endpoints for tenants, zone assignments and tenant keys. A tenant key gets 404 for any zone
+     it does not own and for the operator endpoints; a zone that is not assignable (not `full`)
+     is 404 for every key.
+   - Authentication: `Authorization: Bearer`, the hash compared in constant time; then expiry
+     (401 `key_expired`), the tenant's enabled flag (403 `tenant_disabled`) and the key's
+     allowlist (403 `address_not_allowed`). Ten failed authentications from one address in a
+     minute give 429 with `Retry-After` for the rest of the minute. A read key may only `GET`.
+   - Errors from dnshelper keep their code; `TaskRefused` maps by code (`not_permitted` 403,
+     `zone_not_found` 404, `stale`/`conflict` 409, `auth_failed` 502, others 400); a failed step is
+     502 `upstream_error`, a task over 150 s 504, the api-server unreachable 503.
+   - Tested: 29 unit tests with a fake backend (in the image build), the robot suite on CI nodes
+     without dnshelper, and on the test node after `update-module` from step 1: the grants and
+     the new state files appeared, keys made from the shell and through the API worked, a
+     disabled tenant's key was refused, a self-call making an operator key was refused, and
+     `2v6.in` was refused as not assignable (dnshelper has no rule for dnsapi there).
+   - Real records, on the test node (2026-11-21): with a temporary "API module (all records)"
+     rule for `module/dnsapi2` on `example.com` (ns8-powerdns), removed afterwards. Two tenants:
+     the zone assigned to A, and refused to B (409 `zone_assigned`). A's read key listed the zone
+     and read its records, with the `type` filter and `propagation`; B's got an empty zone list
+     and 404 for the zone; the operator saw the zone with its tenant; `2v6.in` (no rule) was 404
+     for both; after unassigning, A got 404. dnshelper logged every call as
+     `caller="module/dnsapi2"`. Records read in about 0.47 s (`get-records` and `list-owners` in
+     parallel), propagation in 5 s. Not tested on a node: `owned_by`, because the zone had no
+     record another module wrote (the unit tests cover it).
 3. Write endpoints over `apply-changes`, `append-records`, `set-records`, `delete-records`
    (dnshelper's phase 1: released in 0.7.0).
 4. Admin UI; OpenAPI document; README with a Blesta/WHMCS-style walk-through.

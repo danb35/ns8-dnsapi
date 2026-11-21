@@ -1,0 +1,70 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "list-tenants output",
+    "$id": "http://schema.nethserver.org/dnsapi/list-tenants-output.json",
+    "description": "Every tenant",
+    "examples": [
+        {
+            "tenants": [
+                {
+                    "id": "t1a2b3c4d",
+                    "name": "Acme Ltd",
+                    "enabled": true,
+                    "zones": [
+                        "example.com"
+                    ],
+                    "created": "2026-11-21T18:00:00Z",
+                    "keys": 1
+                }
+            ]
+        }
+    ],
+    "type": "object",
+    "required": [
+        "tenants"
+    ],
+    "properties": {
+        "tenants": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": [
+                    "id",
+                    "name",
+                    "enabled",
+                    "zones",
+                    "created"
+                ],
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "pattern": "^t[0-9a-f]{8}$",
+                        "description": "Tenant id"
+                    },
+                    "name": {
+                        "type": "string"
+                    },
+                    "enabled": {
+                        "type": "boolean"
+                    },
+                    "zones": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    },
+                    "created": {
+                        "type": [
+                            "string",
+                            "null"
+                        ]
+                    },
+                    "keys": {
+                        "type": "integer",
+                        "description": "Number of keys"
+                    }
+                }
+            }
+        }
+    }
+}

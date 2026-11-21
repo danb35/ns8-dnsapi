@@ -1,0 +1,34 @@
+#!/usr/bin/env python3
+
+#
+# Copyright (C) 2026 Dan Brown
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+
+# Remove a tenant with its zone assignments and its keys. The records in
+# its zones are not touched.
+
+import json
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.environ["AGENT_INSTALL_DIR"], "pypkg"))
+from dnsapi import state
+
+request = json.load(sys.stdin)
+with state.locked():
+    tenants = state.tenants()
+    tenant = tenants.pop(request["id"], None)
+    if tenant is None:
+        state.fail("id", "tenant_not_found", request["id"], "no such tenant")
+    keys = state.keys()
+    revoked = sorted(k for k, r in keys.items() if r["owner"] == request["id"])
+    for key_id in revoked:
+        del keys[key_id]
+    # Keys first: a key whose tenant is gone is refused anyway, but should
+    # not be left behind.
+    state.save_keys(keys)
+    state.save_tenants(tenants)
+state.audit("remove-tenant", tenant=request["id"], zones=",".join(tenant.get("zones", [])),
+            keys=",".join(revoked))
+json.dump({}, fp=sys.stdout)

@@ -16,6 +16,16 @@ Login to cluster-admin
     Click    button >> text="Log in"
     Wait For Elements State    css=#main-content    visible    timeout=10s
 
+Call API
+    [Arguments]    ${method}    ${path}    ${key}=${EMPTY}    ${body}=${EMPTY}
+    ${auth} =    Set Variable If    '${key}' != ''    -H 'Authorization: Bearer ${key}'    ${EMPTY}
+    ${data} =    Set Variable If    '''${body}''' != ''    -H 'Content-Type: application/json' --data '${body}'    ${EMPTY}
+    ${out} =    Execute Command    curl -sk -X ${method} ${auth} ${data} -w '\\n\%{http_code}' --resolve ${API_HOST}:443:127.0.0.1 https://${API_HOST}${path}
+    ${status} =    Evaluate    int($out.rsplit('\\n', 1)[1])
+    ${text} =    Evaluate    $out.rsplit('\\n', 1)[0].strip()
+    ${json} =    Evaluate    json.loads($text) if $text else None    modules=json
+    RETURN    ${status}    ${json}
+
 *** Test Cases ***
 Check if dnsapi is installed correctly
     ${output}  ${rc} =    Execute Command    add-module ${IMAGE_URL} 1
@@ -69,12 +79,66 @@ Check that plain HTTP is redirected to HTTPS
     ${output} =    Execute Command    curl -s -o /dev/null -w '\%{http_code} \%{redirect_url}' --resolve ${API_HOST}:80:127.0.0.1 http://${API_HOST}/v1/status
     Should Match Regexp    ${output}    ^30[178] https://${API_HOST}/v1/status$
 
-Check that an unknown endpoint gets a JSON 404
-    ${output} =    Execute Command    curl -sk -o /dev/null -w '\%{http_code}' --resolve ${API_HOST}:443:127.0.0.1 https://${API_HOST}/v1/nothing
-    Should Be Equal    ${output}    404
-    ${body} =    Execute Command    curl -sk --resolve ${API_HOST}:443:127.0.0.1 https://${API_HOST}/v1/nothing
-    ${error} =    Evaluate    json.loads($body)    modules=json
-    Should Be Equal    ${error}[error][code]    not_found
+Check that the API refuses requests without a valid key
+    ${status}    ${body} =    Call API    GET    /v1/nothing
+    Should Be Equal As Integers    ${status}    401
+    Should Be Equal    ${body}[error][code]    missing_key
+    ${status}    ${body} =    Call API    GET    /v1/tenants    dnsapi_00000000_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    Should Be Equal As Integers    ${status}    401
+    Should Be Equal    ${body}[error][code]    invalid_key
+
+Check that an operator key can be made from the shell
+    ${key}    ${rc} =    Execute Command    runagent -m ${module_id} create-key --owner operator --scope write --label ci
+    ...    return_rc=True
+    Should Be Equal As Integers    ${rc}  0
+    Should Match Regexp    ${key}    ^dnsapi_[0-9a-f]{8}_[a-z2-7]{52}$
+    Set Suite Variable    ${OPERATOR_KEY}    ${key}
+    ${status}    ${body} =    Call API    GET    /v1/nothing    ${OPERATOR_KEY}
+    Should Be Equal As Integers    ${status}    404
+    Should Be Equal    ${body}[error][code]    not_found
+
+Check that the operator adds a tenant through the API
+    ${status}    ${body} =    Call API    GET    /v1/tenants    ${OPERATOR_KEY}
+    Should Be Equal As Integers    ${status}    200
+    Should Be Empty    ${body}[tenants]
+    ${status}    ${body} =    Call API    POST    /v1/tenants    ${OPERATOR_KEY}    {"name": "CI tenant"}
+    Should Be Equal As Integers    ${status}    201
+    Should Match Regexp    ${body}[id]    ^t[0-9a-f]{8}$
+    Set Suite Variable    ${TENANT_ID}    ${body}[id]
+    ${output} =    Execute Command    api-cli run module/${module_id}/list-tenants
+    ${listed} =    Evaluate    json.loads($output)    modules=json
+    Should Be Equal    ${listed}[tenants][0][name]    CI tenant
+
+Check that the operator makes a tenant key through the API
+    ${status}    ${body} =    Call API    POST    /v1/tenants/${TENANT_ID}/keys    ${OPERATOR_KEY}    {"scope": "read", "label": "ci tenant"}
+    Should Be Equal As Integers    ${status}    201
+    Set Suite Variable    ${TENANT_KEY}    ${body}[key]
+    Set Suite Variable    ${TENANT_KEY_ID}    ${body}[id]
+    ${output} =    Execute Command    api-cli run module/${module_id}/list-keys
+    Should Not Contain    ${output}    hash
+    Should Not Contain    ${output}    ${TENANT_KEY}
+    Should Contain    ${output}    ${TENANT_KEY_ID}
+
+Check that a tenant key cannot reach the operator endpoints
+    ${status}    ${body} =    Call API    GET    /v1/tenants    ${TENANT_KEY}
+    Should Be Equal As Integers    ${status}    404
+
+Check that the zones endpoint reports dnshelper missing
+    ${status}    ${body} =    Call API    GET    /v1/zones    ${TENANT_KEY}
+    Should Be Equal As Integers    ${status}    503
+    Should Be Equal    ${body}[error][code]    dnshelper_missing
+
+Check that a revoked key stops working
+    ${status}    ${body} =    Call API    DELETE    /v1/tenants/${TENANT_ID}/keys/${TENANT_KEY_ID}    ${OPERATOR_KEY}
+    Should Be Equal As Integers    ${status}    204
+    ${status}    ${body} =    Call API    GET    /v1/zones    ${TENANT_KEY}
+    Should Be Equal As Integers    ${status}    401
+
+Check that removing the tenant through the API works
+    ${status}    ${body} =    Call API    DELETE    /v1/tenants/${TENANT_ID}    ${OPERATOR_KEY}
+    Should Be Equal As Integers    ${status}    204
+    ${status}    ${body} =    Call API    GET    /v1/tenants    ${OPERATOR_KEY}
+    Should Be Empty    ${body}[tenants]
 
 Check if dnsapi is removed correctly
     ${rc} =    Execute Command    remove-module --no-preserve ${module_id}

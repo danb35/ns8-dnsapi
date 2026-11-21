@@ -8,15 +8,27 @@
             "host": "dnsapi.example.com",
             "lets_encrypt": true,
             "http2https": true,
-            "ip_allowlist": ["203.0.113.10"]
+            "ip_allowlist": [
+                "203.0.113.10"
+            ],
+            "rate_limit": 60
         }
     ],
     "type": "object",
     "additionalProperties": false,
-    "required": ["host", "lets_encrypt", "http2https", "ip_allowlist"],
+    "required": [
+        "host",
+        "lets_encrypt",
+        "http2https",
+        "ip_allowlist",
+        "rate_limit"
+    ],
     "properties": {
         "host": {
-            "type": ["string", "null"],
+            "type": [
+                "string",
+                "null"
+            ],
             "description": "The API host name"
         },
         "lets_encrypt": {
@@ -30,6 +42,9 @@
             "items": {
                 "type": "string"
             }
+        },
+        "rate_limit": {
+            "type": "integer"
         }
     }
 }

@@ -1,0 +1,32 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "unassign-zone input",
+    "$id": "http://schema.nethserver.org/dnsapi/unassign-zone-input.json",
+    "description": "Take a zone from a tenant; its records are not changed",
+    "examples": [
+        {
+            "tenant": "t1a2b3c4d",
+            "zone": "example.com"
+        }
+    ],
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+        "tenant": {
+            "type": "string",
+            "pattern": "^t[0-9a-f]{8}$",
+            "description": "Tenant id"
+        },
+        "zone": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 253,
+            "pattern": "^[A-Za-z0-9_.-]+\\.?$",
+            "description": "A zone managed by dnshelper, like 'example.com'"
+        }
+    },
+    "required": [
+        "tenant",
+        "zone"
+    ]
+}

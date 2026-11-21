@@ -1,0 +1,29 @@
+#!/usr/bin/env python3
+
+#
+# Copyright (C) 2026 Dan Brown
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+
+# Take a zone from a tenant. The records are not touched.
+
+import json
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.environ["AGENT_INSTALL_DIR"], "pypkg"))
+from dnsapi import state
+
+request = json.load(sys.stdin)
+zone = request["zone"].lower().rstrip(".")
+with state.locked():
+    tenants = state.tenants()
+    tenant = tenants.get(request["tenant"])
+    if tenant is None:
+        state.fail("tenant", "tenant_not_found", request["tenant"], "no such tenant")
+    if zone not in tenant["zones"]:
+        state.fail("zone", "zone_not_assigned", zone, "the zone is not assigned to this tenant")
+    tenant["zones"].remove(zone)
+    state.save_tenants(tenants)
+state.audit("unassign-zone", tenant=request["tenant"], zone=zone)
+json.dump(state.tenant_view(request["tenant"], tenant), fp=sys.stdout)

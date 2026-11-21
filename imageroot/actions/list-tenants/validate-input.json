@@ -1,0 +1,15 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "list-tenants input",
+    "$id": "http://schema.nethserver.org/dnsapi/list-tenants-input.json",
+    "description": "No input",
+    "examples": [
+        {}
+    ],
+    "type": [
+        "object",
+        "null"
+    ],
+    "additionalProperties": false,
+    "properties": {}
+}

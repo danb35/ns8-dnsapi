@@ -1,0 +1,32 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "assign-zone input",
+    "$id": "http://schema.nethserver.org/dnsapi/assign-zone-input.json",
+    "description": "Give a zone to a tenant. dnshelper must let dnsapi write every record of it (list-zones 'full'), and the zone must not belong to another tenant",
+    "examples": [
+        {
+            "tenant": "t1a2b3c4d",
+            "zone": "example.com"
+        }
+    ],
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+        "tenant": {
+            "type": "string",
+            "pattern": "^t[0-9a-f]{8}$",
+            "description": "Tenant id"
+        },
+        "zone": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 253,
+            "pattern": "^[A-Za-z0-9_.-]+\\.?$",
+            "description": "A zone managed by dnshelper, like 'example.com'"
+        }
+    },
+    "required": [
+        "tenant",
+        "zone"
+    ]
+}

@@ -1,0 +1,22 @@
+#!/usr/bin/env python3
+
+#
+# Copyright (C) 2026 Dan Brown
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+
+import json
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.environ["AGENT_INSTALL_DIR"], "pypkg"))
+from dnsapi import state
+
+tenants = state.tenants()
+keys = state.keys()
+result = []
+for tenant_id in sorted(tenants):
+    view = state.tenant_view(tenant_id, tenants[tenant_id])
+    view["keys"] = sum(1 for r in keys.values() if r["owner"] == tenant_id)
+    result.append(view)
+json.dump({"tenants": result}, fp=sys.stdout)

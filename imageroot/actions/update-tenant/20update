@@ -1,0 +1,29 @@
+#!/usr/bin/env python3
+
+#
+# Copyright (C) 2026 Dan Brown
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+
+# Rename, enable or disable a tenant. A disabled tenant's keys are refused.
+
+import json
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.environ["AGENT_INSTALL_DIR"], "pypkg"))
+from dnsapi import state
+
+request = json.load(sys.stdin)
+with state.locked():
+    tenants = state.tenants()
+    tenant = tenants.get(request["id"])
+    if tenant is None:
+        state.fail("id", "tenant_not_found", request["id"], "no such tenant")
+    if "name" in request:
+        tenant["name"] = request["name"].strip()
+    if "enabled" in request:
+        tenant["enabled"] = request["enabled"]
+    state.save_tenants(tenants)
+state.audit("update-tenant", tenant=request["id"])
+json.dump(state.tenant_view(request["id"], tenant), fp=sys.stdout)

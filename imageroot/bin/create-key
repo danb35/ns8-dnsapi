@@ -1,0 +1,45 @@
+#!/usr/bin/env python3
+
+#
+# Copyright (C) 2026 Dan Brown
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+
+# Make an API key from a shell and print it once:
+#
+#   runagent -m dnsapi1 create-key --owner operator --scope write --label "billing portal"
+#
+# The secret is made here and only its hash is stored, as with the
+# create-key action, so it is never kept in Redis or in the state. This is
+# how the first operator key is made before the admin UI can do it.
+
+import argparse
+import base64
+import hashlib
+import os
+import secrets
+import sys
+
+sys.path.insert(0, os.path.join(os.environ["AGENT_INSTALL_DIR"], "pypkg"))
+from dnsapi import state
+
+parser = argparse.ArgumentParser(prog="create-key")
+parser.add_argument("--owner", required=True, help="operator, or a tenant id (t<8 hex>)")
+parser.add_argument("--scope", required=True, choices=["read", "write"])
+parser.add_argument("--label", default="")
+parser.add_argument("--allowlist", default="", help="comma-separated IP addresses or networks")
+parser.add_argument("--expires", default=None, help="ISO 8601 date-time")
+args = parser.parse_args()
+
+key_id = secrets.token_hex(4)
+secret = base64.b32encode(secrets.token_bytes(32)).decode().rstrip("=").lower()
+key = f"dnsapi_{key_id}_{secret}"
+allowlist = [a.strip() for a in args.allowlist.split(",") if a.strip()]
+with state.locked():
+    error = state.add_key(key_id, hashlib.sha256(key.encode()).hexdigest(), args.owner, args.scope,
+                          args.label, allowlist, args.expires)
+if error:
+    print(f"create-key: {error[0]}: {error[3]} ({error[2]})", file=sys.stderr)
+    sys.exit(1)
+state.audit("create-key", key=key_id, owner=args.owner, scope=args.scope)
+print(key)

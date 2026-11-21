@@ -1,0 +1,68 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "list-assignable-zones output",
+    "$id": "http://schema.nethserver.org/dnsapi/list-assignable-zones-output.json",
+    "description": "The zones dnshelper lets dnsapi write in full, with the tenant each belongs to. 'error' says why the list is empty: dnshelper_missing, dnshelper_too_old, or unavailable",
+    "examples": [
+        {
+            "dnshelper": "dnshelper1",
+            "error": null,
+            "zones": [
+                {
+                    "zone": "example.com",
+                    "provider": "cloudflare",
+                    "tenant": "t1a2b3c4d"
+                }
+            ]
+        }
+    ],
+    "type": "object",
+    "required": [
+        "dnshelper",
+        "zones",
+        "error"
+    ],
+    "properties": {
+        "dnshelper": {
+            "type": [
+                "string",
+                "null"
+            ],
+            "description": "The dnshelper instance used"
+        },
+        "error": {
+            "type": [
+                "string",
+                "null"
+            ]
+        },
+        "zones": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": [
+                    "zone",
+                    "provider",
+                    "tenant"
+                ],
+                "properties": {
+                    "zone": {
+                        "type": "string"
+                    },
+                    "provider": {
+                        "type": [
+                            "string",
+                            "null"
+                        ]
+                    },
+                    "tenant": {
+                        "type": [
+                            "string",
+                            "null"
+                        ]
+                    }
+                }
+            }
+        }
+    }
+}

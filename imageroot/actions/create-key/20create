@@ -1,0 +1,33 @@
+#!/usr/bin/env python3
+
+#
+# Copyright (C) 2026 Dan Brown
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+
+# Store a new API key from its id and SHA-256 hash. The secret is made by
+# whoever calls the action (the API service, or the admin UI in the
+# browser) and never reaches it, so no secret is ever kept in Redis or in
+# the state. From a shell, bin/create-key makes one and prints it.
+#
+# The API service calls this action through its selfadm role, to make
+# tenant keys only: it may not make operator keys.
+
+import json
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.environ["AGENT_INSTALL_DIR"], "pypkg"))
+from dnsapi import state
+
+request = json.load(sys.stdin)
+if request["owner"] == "operator" and state.caller() == os.environ.get("AGENT_ID"):
+    state.fail("owner", "not_permitted", "operator", "operator keys are made by a cluster administrator")
+with state.locked():
+    error = state.add_key(request["id"], request["hash"], request["owner"], request["scope"],
+                          request.get("label", ""), request.get("allowlist"), request.get("expires"))
+    if error:
+        state.fail(*error)
+    record = state.keys()[request["id"]]
+state.audit("create-key", key=request["id"], owner=request["owner"], scope=request["scope"])
+json.dump(state.key_view(request["id"], record), fp=sys.stdout)

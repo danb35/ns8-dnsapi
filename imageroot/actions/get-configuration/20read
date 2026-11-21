@@ -8,7 +8,7 @@
 import json
 import sys
 
-DEFAULTS = {"host": None, "lets_encrypt": False, "http2https": True, "ip_allowlist": []}
+DEFAULTS = {"host": None, "lets_encrypt": False, "http2https": True, "ip_allowlist": [], "rate_limit": 60}
 
 try:
     with open("settings.json") as fp:

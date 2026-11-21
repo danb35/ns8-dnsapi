@@ -1,0 +1,12 @@
+#!/bin/bash
+
+#
+# Copyright (C) 2026 Dan Brown
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+
+# dnshelper may have been installed, removed or changed: refresh what the
+# API service uses. Never fail an event handler.
+exec 1>&2
+discover-runtime || echo "discover-runtime failed" >&2
+exit 0

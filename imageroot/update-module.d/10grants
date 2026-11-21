@@ -1,0 +1,16 @@
+#!/bin/bash
+
+#
+# Copyright (C) 2026 Dan Brown
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+
+# On update: the API service changes tenants, zone assignments and keys by calling this
+# module's own actions (DESIGN.md, Runtime), so the actions stay the only
+# writers of the state. selfadm already holds configure-module.
+set -e
+exec 1>&2
+redis-exec SADD "${AGENT_ID}/roles/selfadm" \
+    add-tenant update-tenant remove-tenant \
+    assign-zone unassign-zone \
+    create-key revoke-key

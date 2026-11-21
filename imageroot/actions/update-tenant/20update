@@ -25,5 +25,5 @@ with state.locked():
     if "enabled" in request:
         tenant["enabled"] = request["enabled"]
     state.save_tenants(tenants)
-state.audit("update-tenant", tenant=request["id"])
+state.audit("update-tenant", tenant=request["id"], name=tenant["name"])
 json.dump(state.tenant_view(request["id"], tenant), fp=sys.stdout)

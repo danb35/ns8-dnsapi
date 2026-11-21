@@ -202,7 +202,13 @@ export default {
     details(row) {
       const parts = [];
       if (row.tenant && !row.zone) {
-        parts.push(this.tenantName(this.tenants, row.tenant));
+        // the name recorded with the change, for a tenant removed since
+        const known = this.tenants.some((t) => t.id === row.tenant);
+        parts.push(
+          known || !row.name
+            ? this.tenantName(this.tenants, row.tenant)
+            : row.name
+        );
       }
       // admin entries name the key acted on as key, API entries as target_key
       const target = row.source === "admin" ? row.key : row.target_key;

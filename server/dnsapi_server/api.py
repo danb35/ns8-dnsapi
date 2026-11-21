@@ -610,7 +610,7 @@ class Api:
         body = self.body_object(req)
         data = {k: body[k] for k in ("name", "enabled") if k in body}
         output = self.own_action("add-tenant", data)
-        self.audit(req, "add-tenant", tenant=output["id"])
+        self.audit(req, "add-tenant", tenant=output["id"], name=data.get("name", ""))
         return HTTPStatus.CREATED, self.tenant_view(output["id"])
 
     def update_tenant(self, req):
@@ -620,15 +620,16 @@ class Api:
         body = self.body_object(req)
         data = {k: body[k] for k in ("name", "enabled") if k in body}
         self.own_action("update-tenant", {"id": tenant_id, **data})
-        self.audit(req, "update-tenant", tenant=tenant_id)
+        self.audit(req, "update-tenant", tenant=tenant_id, name=self.store.tenant(tenant_id).get("name", ""))
         return HTTPStatus.OK, self.tenant_view(tenant_id)
 
     def remove_tenant(self, req):
         self.require_operator(req)
         self.require_write(req)
         tenant_id = self.tenant_param(req)
+        name = self.store.tenant(tenant_id).get("name", "")
         self.own_action("remove-tenant", {"id": tenant_id})
-        self.audit(req, "remove-tenant", tenant=tenant_id)
+        self.audit(req, "remove-tenant", tenant=tenant_id, name=name)
         return HTTPStatus.NO_CONTENT, None
 
     def assign_zone(self, req):

@@ -446,6 +446,17 @@ wraps the task events in one promise, as theirs do):
      README's "Writing a portal integration" for the portal's developer.
    - CI takes screenshots of every page (and of the create-key dialog) when a commit changes
      `ui/`, after a tenant and keys exist; `test-module.yml` follows ns8-automx's.
+   - Tested in a browser on the test node (2026-11-21, cluster admin UI, `dnsapi2`): every page;
+     adding a tenant, disabling it (its key was then refused with 403 `tenant_disabled`) and
+     removing it with its key; making a tenant key in the browser and using it against the API
+     (200 on its zones, 404 on the operator endpoints), with its secret found neither in
+     `keys.json` nor in the module's task records in Redis; an operator key limited to ACME
+     records with an allowed address; revoking it; saving Settings. Fixed from what that showed:
+     `NsComboBox` shows the raw value of a fixed choice (`write`, `none`), so fixed lists use
+     `cv-select` as dnshelper does; a static `&#10;` placeholder is not decoded; the full API
+     address did not fit its Status card (the host name is shown); a missing `type_to_confirm`
+     string and "its 1 keys"; a removed tenant showed only its id on the Activity page (its name
+     is now recorded with the change).
 6. Node test: two tenants, isolation (a tenant key cannot read or write the other tenant's zone),
    a zone dnshelper's policy does not grant, rate limits, key revocation; a certificate from Let's
    Encrypt's staging CA with lego against a zone with only the ACME rule.

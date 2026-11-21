@@ -92,6 +92,10 @@
                     },
                     "target_key": {
                         "type": "string"
+                    },
+                    "name": {
+                        "type": "string",
+                        "description": "The tenant's name, for tenant changes"
                     }
                 }
             }

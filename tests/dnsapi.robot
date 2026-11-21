@@ -138,6 +138,24 @@ Check that a change reports dnshelper missing
     Should Be Equal As Integers    ${status}    503
     Should Be Equal    ${body}[error][code]    dnshelper_missing
 
+Check that a key restricted to ACME records cannot manage tenants
+    ${key}    ${rc} =    Execute Command    runagent -m ${module_id} create-key --owner operator --scope write --restrict acme --label ci-acme
+    ...    return_rc=True
+    Should Be Equal As Integers    ${rc}  0
+    Set Suite Variable    ${ACME_KEY}    ${key}
+    ${status}    ${body} =    Call API    GET    /v1/tenants    ${ACME_KEY}
+    Should Be Equal As Integers    ${status}    403
+    Should Be Equal    ${body}[error][code]    restricted_key
+    ${output} =    Execute Command    api-cli run module/${module_id}/list-keys --data '{"owner": "operator"}'
+    Should Contain    ${output}    _acme-challenge
+
+Check that the ACME endpoints take Basic authentication
+    ${output} =    Execute Command    curl -sk -u 'any:${ACME_KEY}' -H 'Content-Type: application/json' --data '{"fqdn": "_acme-challenge.www.example.test.", "value": "x"}' -w '\\n\%{http_code}' --resolve ${API_HOST}:443:127.0.0.1 https://${API_HOST}/v1/acme/present
+    Should End With    ${output}    503
+    Should Contain    ${output}    dnshelper_missing
+    ${output} =    Execute Command    curl -sk -u 'any:${ACME_KEY}' -o /dev/null -w '\%{http_code}' --resolve ${API_HOST}:443:127.0.0.1 https://${API_HOST}/v1/zones
+    Should Be Equal    ${output}    401
+
 Check that a revoked key stops working
     ${status}    ${body} =    Call API    DELETE    /v1/tenants/${TENANT_ID}/keys/${TENANT_KEY_ID}    ${OPERATOR_KEY}
     Should Be Equal As Integers    ${status}    204

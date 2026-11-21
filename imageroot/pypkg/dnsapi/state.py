@@ -173,6 +173,7 @@ def key_view(key_id, record, used=None):
         "label": record.get("label", ""),
         "allowlist": record.get("allowlist") or [],
         "expires": record.get("expires"),
+        "restrict": record.get("restrict"),
         "created": record.get("created"),
         "last_used": (used or {}).get(key_id),
     }
@@ -180,6 +181,36 @@ def key_view(key_id, record, used=None):
 
 KEY_ID_PATTERN = "^[0-9a-f]{8}$"
 HASH_PATTERN = "^[0-9a-f]{64}$"
+# A key's restrict (DESIGN.md, ACME DNS-01 validation): name patterns relative
+# to the zone and record types, matched as dnshelper matches its rules.
+RESTRICT_PRESETS = {
+    "acme": {"names": ["_acme-challenge", "_acme-challenge.*"], "types": ["TXT"]},
+}
+NAME_PATTERN = "^[a-z0-9_.*?@-]{1,253}$"
+TYPE_PATTERN = "^([A-Z0-9]{1,10}|\\*)$"
+
+
+def parse_restrict(value):
+    """None, a preset name, or {"names", "types"} -> None or a normalized dict."""
+    import re
+
+    if value in (None, "", {}):
+        return None
+    if isinstance(value, str):
+        if value not in RESTRICT_PRESETS:
+            raise ValueError("unknown preset")
+        return {k: list(v) for k, v in RESTRICT_PRESETS[value].items()}
+    if not isinstance(value, dict) or set(value) - {"names", "types"}:
+        raise ValueError("names and types only")
+    names = [str(n).strip().lower().rstrip(".") or "@" for n in value.get("names") or ["*"]]
+    types = [str(t).strip().upper() for t in value.get("types") or ["*"]]
+    for name in names:
+        if not re.match(NAME_PATTERN, name):
+            raise ValueError(f"bad name pattern {name}")
+    for rtype in types:
+        if not re.match(TYPE_PATTERN, rtype):
+            raise ValueError(f"bad record type {rtype}")
+    return {"names": list(dict.fromkeys(names)), "types": list(dict.fromkeys(types))}
 
 
 def parse_expiry(value):
@@ -197,7 +228,7 @@ def parse_expiry(value):
     return when.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def add_key(key_id, key_hash, owner, scope, label="", allowlist=None, expires=None):
+def add_key(key_id, key_hash, owner, scope, label="", allowlist=None, expires=None, restrict=None):
     """Store a new key record (the caller holds locked()). Return an error
     (field, code, value, message) or None."""
     import re
@@ -217,6 +248,10 @@ def add_key(key_id, key_hash, owner, scope, label="", allowlist=None, expires=No
         expires = parse_expiry(expires)
     except ValueError as exc:
         return ("expires", "invalid_expiry", str(expires), str(exc))
+    try:
+        restrict = parse_restrict(restrict)
+    except ValueError as exc:
+        return ("restrict", "invalid_restrict", json.dumps(restrict), str(exc))
     all_keys = keys()
     if key_id in all_keys:
         return ("id", "key_exists", key_id, "a key with this id exists")
@@ -227,6 +262,7 @@ def add_key(key_id, key_hash, owner, scope, label="", allowlist=None, expires=No
         "label": label or "",
         "allowlist": allowlist,
         "expires": expires,
+        "restrict": restrict,
         "created": now(),
     }
     save_keys(all_keys)

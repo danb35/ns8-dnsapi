@@ -10,9 +10,9 @@ The dnshelper side is in
 "Delegated access for an API module". Items marked **VERIFY** were not confirmed from the sources
 or on a node.
 
-Status: build order steps 1 to 3 are done (the service and its route; tenants, keys,
-authentication, rate limits and the read endpoints; the write endpoints); the ACME additions and
-the admin UI are design. dnshelper's side, phase 1, is released in dnshelper 0.7.0 (2026-11-21), which this
+Status: build order steps 1 to 4 are done (the service and its route; tenants, keys,
+authentication, rate limits and the read endpoints; the write endpoints; ACME DNS-01); the admin
+UI is design. dnshelper's side, phase 1, is released in dnshelper 0.7.0 (2026-11-21), which this
 module needs at least.
 
 Origin: forum request, community.nethserver.org topic 28774, posts 32-37 (2026-11-18/20). The
@@ -93,7 +93,7 @@ and SOA read-only.
 | `DELETE /v1/zones/{zone}/records` `{records, dry_run}` | write | `delete-records` |
 | `GET /v1/zones/{zone}/propagation?name=&type=` | any | `check-propagation` (in dnshelper's `dnsreader` role since 0.7.0) |
 | `GET/POST/PATCH/DELETE /v1/tenants[/{id}]` | operator | none (dnsapi's own state) |
-| `PUT/DELETE /v1/tenants/{id}/zones/{zone}` | operator | `has-zone` checks that dnsapi may write all of it (`full`) |
+| `PUT/DELETE /v1/tenants/{id}/zones/{zone}` | operator | `list-zones` checks that dnsapi may write in it (`access: "write"`; `full` or not) |
 | `POST/DELETE /v1/tenants/{id}/keys[/{key id}]` | operator | none |
 | `POST /v1/acme/present`, `POST /v1/acme/cleanup` `{fqdn, value}` | write | `append-records`, `delete-records` of one `_acme-challenge` TXT record (see [ACME DNS-01 validation](#acme-dns-01-validation)) |
 | `GET /v1/status` | none | none (liveness only, says nothing about zones) |
@@ -150,10 +150,18 @@ make it safe and easy:
      key's `restrict` applies too.
    - These clients send HTTP Basic authentication. dnsapi accepts Basic, with the key as the
      password and any user name, on these two endpoints only; Bearer works there too.
-   - **VERIFY** against the sources of lego (`providers/dns/httpreq`) and acme.sh
-     (`dnsapi/dns_acmeproxy.sh`): the paths, the JSON fields, the trailing dot, the
-     authentication, and what each expects in the response.
-   - certbot has no such plugin: the README shows `--manual-auth-hook` and
+   - Verified against the sources (2026-11-21; lego v5.6.0 `providers/dns/httpreq/httpreq.go`,
+     acme.sh `dnsapi/dns_acmeproxy.sh`): both `POST <endpoint>/present` and `/cleanup` with
+     `{"fqdn", "value"}` and `Content-Type: application/json`, and send Basic authentication only
+     when both user name and password are set.
+     - lego sends its `EffectiveFQDN` with the trailing dot, which follows a CNAME on
+       `_acme-challenge`; such a target outside `_acme-challenge` names is refused. It accepts any
+       2xx and ignores the body. Its HTTP timeout is 30 s by default (`HTTPREQ_HTTP_TIMEOUT`).
+       Its `RAW` mode (`{"domain", "token", "keyAuth"}`) is not supported.
+     - acme.sh appends the trailing dot itself and counts the call as done only when the reply
+       contains the value in quotes, so both endpoints answer with `{"fqdn", "value", "zone",
+       "changes"}`.
+   - certbot has no such plugin: the user guide shows `--manual-auth-hook` and
      `--manual-cleanup-hook` scripts that call the REST API with curl.
 
 A typical setup for internal hosts:
@@ -383,8 +391,31 @@ This is not the customer control panel: only cluster administrators can reach it
      with the message "dnsapi-test-a has a CNAME, which cannot coexist with A records", which
      names the wrong side; the code (`conflict`) is right.
 4. ACME DNS-01: key restrictions, zones with partial access, `/v1/acme/present` and `/cleanup`;
-   README walk-throughs for lego, acme.sh and certbot.
-5. Admin UI; OpenAPI document; README with a Blesta/WHMCS-style walk-through.
+   walk-throughs for lego, acme.sh and certbot in the user guide. **Done** (2026-11-21):
+   - `restrict` on a key: `create-key` and `bin/create-key --restrict acme` (or patterns with
+     `--types`), and `POST /v1/tenants/{id}/keys`. Normalized as dnshelper normalizes rules
+     (names lowercase without a trailing dot, `@` for the apex; types uppercase) and matched with
+     the same `fnmatchcase`.
+   - Assignable zones are those with `access: "write"`; `full` is shown in `GET /v1/zones` and
+     `list-assignable-zones`, and the prune on `service-dnshelper-changed` keeps writable zones.
+   - `/v1/acme/present` adds the TXT record with TTL 60; `/cleanup` deletes that value. Both run
+     through the same path as the other changes (write scope, `restrict`, rate limit, audit line,
+     `on_behalf_of`). Basic authentication is decoded only on `/v1/acme/`.
+   - Tested on the test node (2026-11-21) on `2v6.in` (Cloudflare), with a temporary dnshelper
+     rule for `module/dnsapi2` with the ACME preset only (names `_acme-challenge`,
+     `_acme-challenge.*`, TXT), removed afterwards: the zone was assignable with `full: false`;
+     an unrestricted tenant key was refused an A record by dnshelper (403 `not_permitted`) and a
+     restricted key by dnsapi (403 `outside_restriction`); lego 5.6.0 with `httpreq`, Basic
+     authentication and Let's Encrypt's staging CA obtained a certificate for
+     `dnsapi-acme-test.2v6.in` in 34 s; `present` and `cleanup` each logged one audit line,
+     dnshelper recorded `on_behalf_of`, and no challenge record was left. lego's own
+     propagation checks failed twice on that node before Let's Encrypt was asked, for reasons
+     outside dnsapi: the LAN resolver answered NXDOMAIN for the zone, and IPv6 to Cloudflare's
+     name servers timed out; `--dns.resolvers 1.1.1.1:53 --dns.propagation.disable-ans` solved
+     both (in the user guide's troubleshooting). acme.sh was not run; its format is covered by
+     unit tests.
+5. Admin UI; OpenAPI document; a Blesta/WHMCS-style walk-through (user guide for the
+   administrator, README for the portal's developer).
 6. Node test: two tenants, isolation (a tenant key cannot read or write the other tenant's zone),
    a zone dnshelper's policy does not grant, rate limits, key revocation; a certificate from Let's
    Encrypt's staging CA with lego against a zone with only the ACME rule.

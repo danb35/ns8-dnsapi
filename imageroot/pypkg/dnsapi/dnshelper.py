@@ -9,8 +9,10 @@
 #   the first one discovery finds, by install order (DESIGN.md, open
 #   question 7).
 # - list-zones: {"zones": [{"zone", "credential", "provider", "access", "full"}]},
-#   only the zones with a rule for this module. "full" is a write rule with
-#   names "*" and types "*": the zones dnsapi may hand to tenants.
+#   only the zones with a rule for this module. dnsapi may hand a tenant any
+#   zone with access "write"; "full" (a write rule with names "*" and types
+#   "*") is what a hosting customer needs, a narrower rule (dnshelper's ACME
+#   preset) is enough for ACME DNS-01 (DESIGN.md, ACME DNS-01 validation).
 # - has-zone {"name"}: {"managed", "zone", "allowed", "access", "full"}.
 # - Refusals come back as a validation failure, the list in "output":
 #   [{"field", "parameter", "value", "error", "message"}].
@@ -44,10 +46,11 @@ def call(target, action, data):
     raise DnshelperError("unavailable", "dnshelper did not answer")
 
 
-def full_zones(target):
-    """{zone: provider} for the zones dnsapi may write in full."""
+def writable_zones(target):
+    """{zone: {"provider", "full"}} for the zones dnsapi may write in."""
     output = call(target, "list-zones", {})
-    if not output or any("full" not in z for z in output.get("zones", [])):
+    if not output or any("full" not in z or "access" not in z for z in output.get("zones", [])):
         # dnshelper before 0.7.0 says nothing about how much a module may do.
         raise DnshelperError("dnshelper_too_old", "dnshelper 0.7.0 or later is required")
-    return {z["zone"]: z.get("provider") for z in output["zones"] if z.get("full")}
+    return {z["zone"]: {"provider": z.get("provider"), "full": bool(z["full"])}
+            for z in output["zones"] if z["access"] == "write"}

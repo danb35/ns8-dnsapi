@@ -1,6 +1,13 @@
 Read @DESIGN.md before doing anything; items marked VERIFY must be checked against the NS8 docs or a
 live node, not assumed.
 
+## Documentation
+
+As in ns8-dnshelper and ns8-automx: `README.md` is for developers (people who build, test or work
+on dnsapi, and who write a client for its API), `docs/USER-GUIDE.md` for the system
+administrator (publishing the API, zones, tenants, keys, ACME clients, troubleshooting). Each
+starts by pointing to the other. DESIGN.md keeps the design, the decisions and what was tested.
+
 ## dnshelper (DNS records)
 
 This module reads and changes DNS records only by calling the `dnshelper` module, which lives in

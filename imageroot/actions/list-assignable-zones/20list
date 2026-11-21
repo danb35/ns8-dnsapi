@@ -26,11 +26,11 @@ if target is None:
     result["error"] = "dnshelper_missing"
 else:
     try:
-        full = dnshelper.full_zones(target)
+        writable = dnshelper.writable_zones(target)
     except dnshelper.DnshelperError as exc:
         result["error"] = exc.code
-        full = {}
+        writable = {}
     tenants = state.tenants()
-    result["zones"] = [{"zone": z, "provider": full[z], "tenant": state.zone_owner(tenants, z)}
-                       for z in sorted(full)]
+    result["zones"] = [{"zone": z, "provider": writable[z]["provider"], "full": writable[z]["full"],
+                        "tenant": state.zone_owner(tenants, z)} for z in sorted(writable)]
 json.dump(result, fp=sys.stdout)

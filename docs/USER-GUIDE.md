@@ -1,0 +1,264 @@
+# dnsapi user guide
+
+This guide is for the person who administers an NS8 node. It explains what dnsapi does, what it
+needs before it can do anything, how to publish the API, how to decide which zones it may hand
+out, how to make keys for a billing portal, for customers and for systems that need
+certificates, and what to do when something goes wrong. Developers who write a client for the
+API, or who want to know how dnsapi is built, should read the [main README](../README.md)
+instead.
+
+The admin UI does not yet have pages for tenants and keys: until it does, this guide uses the
+command line on the node (`api-cli`, `runagent`).
+
+- [What dnsapi does](#what-dnsapi-does)
+- [Before you start](#before-you-start)
+- [Publishing the API](#publishing-the-api)
+- [Letting dnsapi use zones](#letting-dnsapi-use-zones)
+- [Tenants and their zones](#tenants-and-their-zones)
+- [Keys](#keys)
+- [Connecting a billing or client portal](#connecting-a-billing-or-client-portal)
+- [Certificates for other systems (ACME DNS-01)](#certificates-for-other-systems-acme-dns-01)
+- [Seeing what happened](#seeing-what-happened)
+- [Backup and restore](#backup-and-restore)
+- [When something goes wrong](#when-something-goes-wrong)
+
+## What dnsapi does
+
+dnsapi publishes an HTTPS API on a host name of its own, so that software outside the cluster
+can read and change DNS records:
+
+- a billing or client portal (Blesta, WHMCS, your own) that manages your customers' DNS;
+- your customers' own scripts, each limited to that customer's zones;
+- systems that get certificates from Let's Encrypt with the DNS-01 challenge, including ones the
+  internet cannot reach, each limited to its `_acme-challenge` records.
+
+It does not talk to DNS hosts itself. Every read and change goes through
+[dnshelper](https://github.com/danb35/ns8-dnshelper), which holds the DNS host credentials and
+decides, on its Access page, what dnsapi may touch. dnsapi adds its own limits on top: which
+customer (tenant) owns which zone, and what each key may do.
+
+## Before you start
+
+- **dnshelper 0.7.0 or later**, with the zones you want to manage added to it. Older releases do
+  not tell dnsapi how much it may change, and dnsapi then offers no zones.
+- **A host name for the API**, such as `dnsapi.example.com`, with a DNS record pointing to the
+  node. It must not be used by another application on the node.
+- To get a Let's Encrypt certificate for that name, port 80 of the node must be reachable from
+  the internet.
+
+## Publishing the API
+
+Set the host name, and optionally the certificate and the addresses allowed to connect:
+
+    api-cli run module/dnsapi1/configure-module --data '{"host": "dnsapi.example.com", "lets_encrypt": true}'
+
+- `host`: the API is served at `https://<host>/v1/`. Required the first time.
+- `lets_encrypt`: request a Let's Encrypt certificate. If it is not issued, the action fails and
+  nothing changes. Default off.
+- `http2https`: redirect plain HTTP to HTTPS. Default on.
+- `ip_allowlist`: addresses or networks (`203.0.113.10`, `198.51.100.0/24`) that may reach the
+  API at all; everyone else is refused before dnsapi sees the request. Empty allows every
+  address. If your only client is a billing server, put its address here.
+- `rate_limit`: DNS requests per minute for each key, default 60. Reads count too, because they
+  count against your DNS host's own limits (GoDaddy, for example, allows about 60 per minute).
+
+A field you leave out keeps its value. The Settings page in the admin UI sets all of them except
+`rate_limit`.
+Check that the API answers:
+
+    curl https://dnsapi.example.com/v1/status
+
+which answers `{"status": "ok"}`.
+
+## Letting dnsapi use zones
+
+dnshelper refuses everything to dnsapi until you add a rule for it. On dnshelper's Access page,
+add a rule for `module/dnsapi1` on the zones it may hand out, with one of two presets:
+
+- **API module (all records)**: dnsapi may change every record of the zone. Use it for a
+  customer who manages the whole zone through your portal.
+- **ACME DNS-01**: dnsapi may change only `_acme-challenge` TXT records. Use it for a zone that is
+  used only to validate certificates (see [below](#certificates-for-other-systems-acme-dns-01)).
+
+dnshelper still refuses what no rule covers, and never changes the zone's SOA or its apex NS
+records. To see what dnsapi may hand out:
+
+    api-cli run module/dnsapi1/list-assignable-zones
+
+`"full": true` means every record; `false` means only what the rule allows.
+
+## Tenants and their zones
+
+A tenant is one of your customers. Each zone belongs to at most one tenant, and a tenant's keys
+reach only its own zones.
+
+    api-cli run module/dnsapi1/add-tenant --data '{"name": "Acme Ltd"}'
+    api-cli run module/dnsapi1/assign-zone --data '{"tenant": "t1a2b3c4d", "zone": "acme.example"}'
+    api-cli run module/dnsapi1/list-tenants
+
+`update-tenant` renames a tenant or disables it (`{"id": "t1a2b3c4d", "enabled": false}`): its keys
+are refused until you enable it again. `unassign-zone` takes a zone back and `remove-tenant`
+removes a tenant with its keys; neither changes any record. Your portal can do all of this
+through the API with an operator key.
+
+If you remove dnshelper's rule for a zone, dnsapi drops it from its tenant the next time
+dnshelper's zones change.
+
+## Keys
+
+A key looks like `dnsapi_1a2b3c4d_...` and is shown only once, when it is made: dnsapi stores only
+a fingerprint of it, so a lost key cannot be recovered, only replaced. There are two kinds:
+
+- an **operator key** reaches every zone dnsapi may hand out and manages tenants and their keys.
+  This is the key for your billing portal. Only you can make one, from the node:
+
+      runagent -m dnsapi1 create-key --owner operator --scope write --label "billing portal"
+
+- a **tenant key** reaches only that tenant's zones, for a customer who scripts their own DNS.
+  Make it the same way with `--owner t1a2b3c4d`, or let your portal make it through the API.
+
+Options for every key:
+
+- `--scope read` for a key that may only read;
+- `--allowlist 203.0.113.10,198.51.100.0/24`: the addresses it may be used from;
+- `--expires 2027-12-31T00:00:00Z`: when it stops working;
+- `--restrict acme`: only `_acme-challenge` TXT records; or `--restrict 'www,mail' --types A,AAAA`
+  for other names and types (names relative to the zone, `*` and `?` allowed). A restricted
+  key cannot manage tenants and keys. A restriction cannot be changed later: make a new key.
+
+List the keys, with when each was last used, and revoke one:
+
+    api-cli run module/dnsapi1/list-keys
+    api-cli run module/dnsapi1/revoke-key --data '{"id": "1a2b3c4d"}'
+
+A revoked key stops working at once. If a key may have leaked, revoke it and make another.
+
+## Connecting a billing or client portal
+
+1. Publish the API ([above](#publishing-the-api)), ideally with `ip_allowlist` set to the portal
+   server's address.
+2. Let dnsapi use the zones ([above](#letting-dnsapi-use-zones)) with the "API module (all
+   records)" preset.
+3. Make an operator key with write scope and give it to the portal, with the API's address.
+
+The portal then adds a tenant for each customer, assigns the customer's zones, and reads and
+changes records for whichever customer is logged in. Its developers will find the API in the
+[README](../README.md#api).
+
+Some records in a customer's zone may have been written by another NS8 module, such as the mail
+server's MX or DKIM record. A customer may change them, but the API warns that the module may
+write them again; a good portal shows that warning before applying the change.
+
+## Certificates for other systems (ACME DNS-01)
+
+A system that gets certificates with the DNS-01 challenge creates a TXT record at
+`_acme-challenge.<its name>`, waits for Let's Encrypt to see it, and removes it. dnsapi lets it do
+that without holding your DNS host's credentials, and without reaching any other record. The
+system only needs to reach the API; the zone itself must be public, because Let's Encrypt asks
+its name servers.
+
+Set it up once:
+
+1. On dnshelper's Access page, a rule for `module/dnsapi1` with the **ACME DNS-01** preset on the
+   zones the certificates are for (or "API module (all records)" if the zone is also a
+   customer's).
+2. A tenant for those systems, with the zones:
+
+       api-cli run module/dnsapi1/add-tenant --data '{"name": "Internal hosts"}'
+       api-cli run module/dnsapi1/assign-zone --data '{"tenant": "t1a2b3c4d", "zone": "example.com"}'
+
+3. One key per system, limited to ACME records and to the system's address:
+
+       runagent -m dnsapi1 create-key --owner t1a2b3c4d --scope write --restrict acme \
+           --allowlist 10.0.0.5 --label "host1 certificates"
+
+Then configure the system's ACME client.
+
+**lego** (also used by Traefik and Caddy), with its `httpreq` provider:
+
+    HTTPREQ_ENDPOINT=https://dnsapi.example.com/v1/acme HTTPREQ_USERNAME=acme HTTPREQ_PASSWORD=<key> \
+        HTTPREQ_HTTP_TIMEOUT=90 lego --dns httpreq -d host1.example.com -m admin@example.com run
+
+`HTTPREQ_HTTP_TIMEOUT` (seconds, default 30) leaves room for slow DNS hosts.
+
+**acme.sh**, with its `acmeproxy` hook:
+
+    export ACMEPROXY_ENDPOINT=https://dnsapi.example.com/v1/acme ACMEPROXY_USERNAME=acme ACMEPROXY_PASSWORD=<key>
+    acme.sh --issue --dns dns_acmeproxy -d host1.example.com
+
+**certbot** has no such plugin; use a hook script:
+
+    certbot certonly --manual --preferred-challenges dns \
+        --manual-auth-hook "/usr/local/bin/dnsapi-hook present" \
+        --manual-cleanup-hook "/usr/local/bin/dnsapi-hook cleanup" \
+        -d host1.example.com
+
+with `/usr/local/bin/dnsapi-hook`, and the key in `DNSAPI_KEY`:
+
+    #!/bin/sh
+    # certbot sets CERTBOT_DOMAIN and CERTBOT_VALIDATION; $1 is present or cleanup.
+    action=$1
+    curl -sf -H "Authorization: Bearer $DNSAPI_KEY" -H "Content-Type: application/json" \
+        -d "{\"fqdn\": \"_acme-challenge.$CERTBOT_DOMAIN.\", \"value\": \"$CERTBOT_VALIDATION\"}" \
+        "https://dnsapi.example.com/v1/acme/$action" >/dev/null || exit 1
+    [ "$action" = present ] && sleep 30
+    exit 0
+
+A wildcard certificate and its base name can be validated together: each value is added beside
+the others and removed on its own.
+
+## Seeing what happened
+
+Every change, and every refused change, writes one line to the module's log in the cluster's
+Logs page (or `journalctl` on the node), starting with `dnsapi audit:`: which key, which tenant,
+from which address, which zone, the records added and removed, and the result. Keys never appear
+in it. dnshelper logs the same change with the tenant and key (`on_behalf_of`), and its Records
+page shows it in the zone's history.
+
+## Backup and restore
+
+The settings, the tenants and their zones, and the keys are backed up with the module. Restored
+keys keep working, and the restore publishes the API's route again. Only the "last used" times
+are not kept.
+
+## When something goes wrong
+
+**`503 dnshelper_missing`**: dnshelper is not installed, or dnsapi has not found it yet. Install
+it; dnsapi notices within moments.
+
+**A zone gives `404 zone_not_found`**: the zone is not assigned to the key's tenant, dnshelper has
+no write rule for dnsapi on it, or the zone is not in dnshelper. Check with
+`list-assignable-zones` and `list-tenants`. A tenant key gets 404 for any zone that is not its
+own, so that a key does not reveal which zones you manage.
+
+**`403 not_permitted`**: dnshelper's rule for dnsapi does not cover that record, for example an A
+record in a zone with only the ACME preset.
+
+**`403 outside_restriction`**: the key is restricted (`--restrict`) and the record is outside it.
+
+**`403 address_not_allowed`**: the key's `--allowlist` does not include the client's address. A
+`403` page without a JSON body comes from Traefik instead: the address is not in the API's
+`ip_allowlist`.
+
+**`401 key_expired`**, **`403 tenant_disabled`**: as they say. Make a new key, or enable the
+tenant.
+
+**`429 rate_limited`**: the key made more than `rate_limit` DNS requests in a minute, or its
+address failed to authenticate ten times in a minute. The `Retry-After` header says how many
+seconds to wait.
+
+**`502 upstream_error`** or **`504 upstream_timeout`**: the DNS host refused or did not answer.
+dnshelper's log has the details.
+
+**An ACME client waits for the record and gives up**, although dnsapi created it (the log shows
+the `append-records` line). The client checks that the record is visible before telling Let's
+Encrypt, and its checks can fail where the client runs:
+
+- a local DNS server (often the router) that answers for your domain itself, or has cached
+  "no such record", never shows it: point the client at a public resolver, for lego
+  `--dns.resolvers 1.1.1.1:53`;
+- with no working IPv6, the query to the zone's own name servers over IPv6 times out: for lego,
+  `--dns.propagation.disable-ans` skips that check and relies on the resolver.
+
+Both were needed on a test node, after which Let's Encrypt validated the record in under half a
+minute.

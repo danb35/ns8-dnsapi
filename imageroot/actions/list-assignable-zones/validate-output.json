@@ -2,7 +2,7 @@
     "$schema": "http://json-schema.org/draft-07/schema#",
     "title": "list-assignable-zones output",
     "$id": "http://schema.nethserver.org/dnsapi/list-assignable-zones-output.json",
-    "description": "The zones dnshelper lets dnsapi write in full, with the tenant each belongs to. 'error' says why the list is empty: dnshelper_missing, dnshelper_too_old, or unavailable",
+    "description": "The zones dnshelper lets dnsapi write in, with the tenant each belongs to. 'error' says why the list is empty: dnshelper_missing, dnshelper_too_old, or unavailable",
     "examples": [
         {
             "dnshelper": "dnshelper1",
@@ -11,7 +11,8 @@
                 {
                     "zone": "example.com",
                     "provider": "cloudflare",
-                    "tenant": "t1a2b3c4d"
+                    "tenant": "t1a2b3c4d",
+                    "full": true
                 }
             ]
         }
@@ -43,7 +44,8 @@
                 "required": [
                     "zone",
                     "provider",
-                    "tenant"
+                    "tenant",
+                    "full"
                 ],
                 "properties": {
                     "zone": {
@@ -60,6 +62,10 @@
                             "string",
                             "null"
                         ]
+                    },
+                    "full": {
+                        "type": "boolean",
+                        "description": "dnsapi may write every record (a hosting customer's zone); false: only what dnshelper's rule allows, such as ACME challenges"
                     }
                 }
             }

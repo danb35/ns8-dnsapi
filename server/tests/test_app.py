@@ -26,6 +26,7 @@ ZONES = [
     {"zone": "beta.test", "credential": "c1", "provider": "cloudflare", "access": "write", "full": True},
     {"zone": "free.test", "credential": "c1", "provider": "cloudflare", "access": "write", "full": True},
     {"zone": "partial.test", "credential": "c1", "provider": "cloudflare", "access": "write", "full": False},
+    {"zone": "readonly.test", "credential": "c1", "provider": "cloudflare", "access": "read", "full": False},
 ]
 RECORDS = {
     "acme.test": [
@@ -148,6 +149,11 @@ class ApiTest(unittest.TestCase):
             ("off", "t00000003", "write", {}),
             ("expired", "operator", "write", {"expires": "2020-01-01T00:00:00Z"}),
             ("fenced", "operator", "write", {"allowlist": ["203.0.113.0/24"]}),
+            ("acme_host", "t00000001", "write",
+             {"restrict": {"names": ["_acme-challenge", "_acme-challenge.*"], "types": ["TXT"]}}),
+            ("op_acme", "operator", "write",
+             {"restrict": {"names": ["_acme-challenge", "_acme-challenge.*"], "types": ["TXT"]}}),
+            ("www_any", "t00000001", "write", {"restrict": {"names": ["www"], "types": ["*"]}}),
         ]:
             key_id, key, key_hash = keyfmt.new_key()
             self.keys[name] = key
@@ -280,8 +286,9 @@ class ApiTest(unittest.TestCase):
     def test_operator_zones(self):
         resp, body = self.request("GET", "/v1/zones", "operator")
         self.assertEqual(resp.status, 200, body)
-        zones = {z["zone"]: z["tenant"] for z in body["zones"]}
-        self.assertEqual(zones, {"acme.test": "t00000001", "beta.test": "t00000002", "free.test": None})
+        zones = {z["zone"]: (z["tenant"], z["full"]) for z in body["zones"]}
+        self.assertEqual(zones, {"acme.test": ("t00000001", True), "beta.test": ("t00000002", True),
+                                 "free.test": (None, True), "partial.test": (None, False)})
 
     def test_tenant_zones(self):
         resp, body = self.request("GET", "/v1/zones", "acme_ro")
@@ -314,10 +321,11 @@ class ApiTest(unittest.TestCase):
             self.assertError(resp, body, 404, "zone_not_found")
         self.assertFalse([c for c in self.backend.calls if c[1] in ("get-records", "check-propagation")])
 
-    def test_operator_reaches_only_full_zones(self):
-        resp, body = self.request("GET", "/v1/zones/free.test/records", "operator")
-        self.assertEqual(resp.status, 200)
-        resp, body = self.request("GET", "/v1/zones/partial.test/records", "operator")
+    def test_operator_reaches_only_writable_zones(self):
+        for zone in ("free.test", "partial.test"):
+            resp, body = self.request("GET", f"/v1/zones/{zone}/records", "operator")
+            self.assertEqual(resp.status, 200)
+        resp, body = self.request("GET", "/v1/zones/readonly.test/records", "operator")
         self.assertError(resp, body, 404, "zone_not_found")
 
     def test_propagation(self):
@@ -457,6 +465,115 @@ class ApiTest(unittest.TestCase):
         data = self.writes()[0][2]
         self.assertEqual(data["zone"], "acme.test")
         self.assertTrue(data["on_behalf_of"].startswith("t00000001:"))
+
+    # key restrictions (DESIGN.md, ACME DNS-01 validation)
+
+    def test_restricted_key_writes_only_inside(self):
+        ok = {"name": "_acme-challenge.www", "type": "TXT", "data": "token"}
+        resp, body = self.request("POST", "/v1/zones/acme.test/records", "acme_host", body={"records": [ok]})
+        self.assertEqual(resp.status, 200, body)
+        for bad in ({"name": "www", "type": "A", "data": "192.0.2.1"},
+                    {"name": "_acme-challenge", "type": "A", "data": "192.0.2.1"},
+                    {"name": "x._acme-challenge", "type": "TXT", "data": "t"}):
+            resp, body = self.request("POST", "/v1/zones/acme.test/changes", "acme_host",
+                                      body={"add": [ok], "remove": [bad]})
+            self.assertError(resp, body, 403, "outside_restriction")
+            self.assertEqual(body["error"]["field"], "remove[0]")
+        # a delete without a type needs every type
+        resp, body = self.request("DELETE", "/v1/zones/acme.test/records", "acme_host",
+                                  body={"records": [{"name": "_acme-challenge"}]})
+        self.assertError(resp, body, 403, "outside_restriction")
+        self.assertEqual(len(self.writes()), 1)
+
+    def test_restriction_any_type(self):
+        resp, body = self.request("DELETE", "/v1/zones/acme.test/records", "www_any",
+                                  body={"records": [{"name": "WWW."}]})
+        self.assertEqual(resp.status, 200, body)
+
+    def test_restricted_key_reads_only_inside(self):
+        resp, body = self.request("GET", "/v1/zones/acme.test/records", "www_any")
+        self.assertEqual([r["name"] for r in body["records"]], ["www"])
+        resp, body = self.request("GET", "/v1/zones/acme.test/propagation?name=@&type=MX", "www_any")
+        self.assertError(resp, body, 403, "outside_restriction")
+        resp, body = self.request("GET", "/v1/zones/acme.test/propagation?name=www&type=A", "www_any")
+        self.assertEqual(resp.status, 200, body)
+
+    def test_restricted_operator_key_cannot_manage(self):
+        resp, body = self.request("GET", "/v1/tenants", "op_acme")
+        self.assertError(resp, body, 403, "restricted_key")
+        resp, body = self.request("GET", "/v1/zones", "op_acme")
+        self.assertEqual(resp.status, 200)
+
+    def test_tenant_key_with_restrict_through_api(self):
+        resp, body = self.request("POST", "/v1/tenants/t00000001/keys", "operator",
+                                  body={"scope": "write", "restrict": "acme"})
+        self.assertEqual(resp.status, 201, body)
+        self.assertEqual(self.backend.calls[-1][2]["restrict"], "acme")
+
+    # ACME endpoints
+
+    def basic(self, key, user="acme"):
+        import base64
+        return {"Authorization": "Basic " + base64.b64encode(f"{user}:{self.keys[key]}".encode()).decode()}
+
+    def test_acme_present_and_cleanup(self):
+        msg = {"fqdn": "_acme-challenge.www.acme.test.", "value": "LHDhK3oGRvkiefQnx7OOczTY5Tic_xZ6HcMOc_gmtoM"}
+        resp, body = self.request("POST", "/v1/acme/present", headers=self.basic("acme_host"), body=msg)
+        self.assertEqual(resp.status, 200, body)
+        self.assertEqual((body["fqdn"], body["value"], body["zone"]), (msg["fqdn"], msg["value"], "acme.test"))
+        agent_id, action, data = self.writes()[-1]
+        self.assertEqual(action, "append-records")
+        self.assertEqual(data["records"], [{"name": "_acme-challenge.www", "type": "TXT", "ttl": 60,
+                                            "data": msg["value"]}])
+        self.assertFalse(data["dry_run"])
+        self.assertTrue(data["on_behalf_of"].startswith("t00000001:"))
+        resp, body = self.request("POST", "/v1/acme/cleanup", headers=self.basic("acme_host"), body=msg)
+        self.assertEqual(resp.status, 200, body)
+        self.assertIn('"%s"' % msg["value"], json.dumps(body))  # what acme.sh looks for
+        agent_id, action, data = self.writes()[-1]
+        self.assertEqual(action, "delete-records")
+        self.assertEqual(data["records"], [{"name": "_acme-challenge.www", "type": "TXT", "data": msg["value"]}])
+
+    def test_acme_apex_and_bearer(self):
+        msg = {"fqdn": "_acme-challenge.acme.test", "value": "v"}
+        resp, body = self.request("POST", "/v1/acme/present", "acme", body=msg)
+        self.assertEqual(resp.status, 200, body)
+        self.assertEqual(self.writes()[-1][2]["records"][0]["name"], "_acme-challenge")
+
+    def test_acme_refusals(self):
+        cases = [
+            ({"fqdn": "www.acme.test.", "value": "v"}, 400, "invalid_request"),
+            ({"fqdn": "_acme-challenge.www.beta.test.", "value": "v"}, 404, "zone_not_found"),
+            ({"fqdn": "_acme-challenge.www.other.test.", "value": "v"}, 404, "zone_not_found"),
+            ({"fqdn": "_acme-challenge.www.acme.test."}, 400, "invalid_request"),
+            ({"domain": "acme.test", "token": "t", "keyAuth": "k"}, 400, "invalid_request"),  # lego RAW mode
+        ]
+        for msg, status, code in cases:
+            resp, body = self.request("POST", "/v1/acme/present", headers=self.basic("acme_host"), body=msg)
+            self.assertError(resp, body, status, code)
+        resp, body = self.request("POST", "/v1/acme/present", headers=self.basic("acme_ro"),
+                                  body={"fqdn": "_acme-challenge.acme.test.", "value": "v"})
+        self.assertError(resp, body, 403, "insufficient_scope")
+        self.assertFalse(self.writes())
+
+    def test_acme_restriction_still_applies(self):
+        resp, body = self.request("POST", "/v1/acme/present", headers=self.basic("www_any"),
+                                  body={"fqdn": "_acme-challenge.acme.test.", "value": "v"})
+        self.assertError(resp, body, 403, "outside_restriction")
+
+    def test_basic_only_on_acme_endpoints(self):
+        resp, body = self.request("GET", "/v1/zones", headers=self.basic("acme"))
+        self.assertError(resp, body, 401, "invalid_key")
+        resp, body = self.request("POST", "/v1/acme/present", headers={"Authorization": "Basic !!!"},
+                                  body={"fqdn": "_acme-challenge.acme.test.", "value": "v"})
+        self.assertError(resp, body, 401, "invalid_key")
+
+    def test_acme_operator_picks_longest_zone(self):
+        self.request("POST", "/v1/acme/present", headers=self.basic("op_acme"),
+                     body={"fqdn": "_acme-challenge.host.free.test.", "value": "v"})
+        data = self.writes()[-1][2]
+        self.assertEqual((data["zone"], data["records"][0]["name"]), ("free.test", "_acme-challenge.host"))
+        self.assertEqual(data["on_behalf_of"], "operator:" + self.key_id("op_acme"))
 
     # tenants (operator)
 

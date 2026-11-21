@@ -22,7 +22,6 @@
         "no_services": "No services",
         "no_images": "No images",
         "no_volumes": "No volumes",
-        "api_url": "API address",
         "dnshelper": "dnshelper instance",
         "dnshelper_none": "Not found",
         "zones_writable": "zone dnsapi may use ({full} in full, {assigned} assigned) | zones dnsapi may use ({full} in full, {assigned} assigned)",
@@ -34,7 +33,8 @@
         "not_configured_description": "Set its host name in Settings to publish it.",
         "go_to_settings": "Settings",
         "no_zones_title": "dnsapi may not use any zone yet",
-        "no_zones_description": "On dnshelper's Access page, add a rule for module/{module} on the zones the API may manage: the \"API module (all records)\" preset for a customer's whole zone, or the ACME preset for certificate validation only."
+        "no_zones_description": "On dnshelper's Access page, add a rule for module/{module} on the zones the API may manage: the \"API module (all records)\" preset for a customer's whole zone, or the ACME preset for certificate validation only.",
+        "api_host": "API host name"
     },
     "settings": {
         "title": "Settings",

@@ -61,7 +61,7 @@
               :label="$t('settings.ip_allowlist')"
               v-model="ipAllowlist"
               :helper-text="$t('settings.ip_allowlist_helper')"
-              placeholder="203.0.113.10&#10;198.51.100.0/24"
+              placeholder="203.0.113.10, 198.51.100.0/24"
               :disabled="stillLoading"
               :invalid-message="error.ip_allowlist"
               class="mg-bottom"

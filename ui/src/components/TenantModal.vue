@@ -129,7 +129,6 @@ export default {
         this.enabled = this.tenant ? this.tenant.enabled : true;
         this.zones = this.tenant ? [...this.tenant.zones] : [];
         this.error = { name: "", save: "" };
-        this.$nextTick(() => this.focusElement("name"));
       }
     },
   },

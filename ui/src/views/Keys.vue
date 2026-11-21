@@ -27,15 +27,22 @@
       </cv-row>
       <cv-row>
         <cv-column :md="4" :max="4">
-          <NsComboBox
+          <cv-select
             v-model="q.owner"
-            :options="filterOptions"
-            :title="$t('keys.show')"
-            :label="$t('keys.show_all')"
+            :label="$t('keys.show')"
             :disabled="loading.load"
-            :marginBottomOnOpen="true"
             class="mg-bottom-md"
-          />
+          >
+            <cv-select-option value="">{{
+              $t("keys.show_all")
+            }}</cv-select-option>
+            <cv-select-option
+              v-for="o in filterOptions"
+              :key="o.value"
+              :value="o.value"
+              >{{ o.label }}</cv-select-option
+            >
+          </cv-select>
         </cv-column>
         <cv-column>
           <NsButton

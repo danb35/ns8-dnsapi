@@ -38,27 +38,35 @@
         <p>{{ $t("keys.created_how", { url: shownUrl }) }}</p>
       </template>
       <cv-form v-else @submit.prevent="save">
-        <NsComboBox
+        <cv-select
           v-model="owner"
-          :options="ownerOptions"
-          :title="$t('keys.owner')"
-          :label="$t('keys.owner_placeholder')"
+          :label="$t('keys.owner')"
           :helper-text="$t('keys.owner_helper')"
           :invalid-message="error.owner"
           :disabled="loading"
-          :marginBottomOnOpen="true"
           class="mg-bottom-md"
           ref="owner"
-        />
-        <NsComboBox
+        >
+          <cv-select-option
+            v-for="o in ownerOptions"
+            :key="o.value"
+            :value="o.value"
+            >{{ o.label }}</cv-select-option
+          >
+        </cv-select>
+        <cv-select
           v-model="scope"
-          :options="scopeOptions"
-          :title="$t('keys.scope')"
           :label="$t('keys.scope')"
           :disabled="loading"
-          :marginBottomOnOpen="true"
           class="mg-bottom-md"
-        />
+        >
+          <cv-select-option
+            v-for="o in scopeOptions"
+            :key="o.value"
+            :value="o.value"
+            >{{ o.label }}</cv-select-option
+          >
+        </cv-select>
         <NsTextInput
           v-model.trim="label"
           :label="$t('keys.label')"
@@ -66,16 +74,20 @@
           :disabled="loading"
           class="mg-bottom-md"
         />
-        <NsComboBox
+        <cv-select
           v-model="restrictKind"
-          :options="restrictOptions"
-          :title="$t('keys.restrict')"
           :label="$t('keys.restrict')"
           :helper-text="$t('keys.restrict_helper')"
           :disabled="loading"
-          :marginBottomOnOpen="true"
           class="mg-bottom-md"
-        />
+        >
+          <cv-select-option
+            v-for="o in restrictOptions"
+            :key="o.value"
+            :value="o.value"
+            >{{ o.label }}</cv-select-option
+          >
+        </cv-select>
         <template v-if="restrictKind === 'custom'">
           <NsTextInput
             v-model.trim="restrictNames"
@@ -100,7 +112,7 @@
           :label="$t('keys.allowlist')"
           :helper-text="$t('keys.allowlist_helper')"
           :invalid-message="error.allowlist"
-          placeholder="203.0.113.10&#10;198.51.100.0/24"
+          placeholder="203.0.113.10, 198.51.100.0/24"
           :disabled="loading"
           class="mg-bottom-md"
         />

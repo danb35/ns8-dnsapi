@@ -62,8 +62,8 @@
       <cv-column :md="4" :max="4">
         <NsInfoCard
           light
-          :title="overview.url || '-'"
-          :description="$t('status.api_url')"
+          :title="overview.host || '-'"
+          :description="$t('status.api_host')"
           :icon="Link32"
           :loading="loading.overview"
           class="min-height-card"

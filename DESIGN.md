@@ -217,6 +217,11 @@ This is not the customer control panel: only cluster administrators can reach it
      allowlist changes twice within a second, Traefik can serve the previous one for about 2 s
      after the second `set-route` returns (seen in 1 of 3 tries). ns8-traefik's reload, not ours,
      and harmless for an admin setting, but a test that changes the allowlist must allow for it.
+   - Backup and restore tested on the test node with a local ("cluster" provider) repository:
+     the backup holds `environment` and `settings.json`; `restore-module` with `replace: true`
+     brought every setting back in a new instance on a new port, `50call-configure-module`
+     recreated the route, and removing the old instance removed its route. That confirms
+     ns8-traefik's clean-up by `MODULE_ID`, so `destroy-module` needs nothing for the route.
 2. Tenants, keys, authentication, rate limits; the read endpoints.
 3. Write endpoints over `apply-changes`, `append-records`, `set-records`, `delete-records`
    (dnshelper's phase 1: released in 0.7.0).

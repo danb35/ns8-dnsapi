@@ -488,12 +488,20 @@ wraps the task events in one promise, as theirs do):
      reachable until dnshelper's rules were changed to the new instance name (user guide, Backup
      and restore). That showed the prune hazard fixed under Module plumbing, Events: the old
      prune emptied both tenants in that state, the new one keeps them.
-   - Not covered: writes on `example.com`. The PowerDNS module hosting it is on node 2, which was
-     offline, and every call to the zone ended in 502 `upstream_error` after dnshelper's provider
-     timeout (the right answer for a DNS host that does not answer). The writes were tested on
-     the same zone in step 3. Also not covered: a Let's Encrypt certificate for the API's own host
-     name (no public DNS record for the test host name), and `owned_by` for a record another
-     module wrote through its own rule (only a record dnsapi wrote without `on_behalf_of`).
+   - Writes on `example.com` (ns8-powerdns, on node 2). Node 2 was offline during the first pass,
+     and every call to the zone ended in 502 `upstream_error` after dnshelper's provider timeout,
+     which is the right answer for a DNS host that does not answer. Rerun once node 2 was back,
+     with the tenants and a full rule for the restored instance: 17 of 17 passed. Add; an edit as
+     a dry run and for real; the same edit again refused (409 `stale`); an RRset replaced; a
+     CNAME beside A records (409 `conflict`); the apex NS (403 `forbidden`); a TXT value with
+     spaces kept; a read key refused (403); the other tenant's key refused (404) for writes and
+     deletes; a module-written record shown with `owned_by` and its deletion warned about, as a
+     dry run and for real; an operator key deleting the tenant's records. dnshelper logged every
+     write with `on_behalf_of="<tenant>:<key id>"`; a write took 0.8 s, a read 0.42 s; the zone
+     ended with its SOA and NS only.
+   - Not covered: a Let's Encrypt certificate for the API's own host name (no public DNS record
+     for the test host name), and `owned_by` for a record another module wrote through its own
+     rule (only a record dnsapi wrote without `on_behalf_of`).
 7. Phase 2 (delegated zones), then phase 3 (PowerDNS hosting), as needed.
 
 ## Open questions

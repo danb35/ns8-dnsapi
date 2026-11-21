@@ -4,31 +4,31 @@
 #
 
 #
-# This systemd unit starts a kickstart instance using Podman.
+# This systemd unit starts a dnsapi instance using Podman.
 # Most parts of this file come from podman-generate-systemd.
 #
 [Unit]
-Description=kickstart server
+Description=dnsapi server
 
 [Service]
 Environment=PODMAN_SYSTEMD_UNIT=%n
 EnvironmentFile=%E/state/environment
 WorkingDirectory=%E/state
 Restart=always
-ExecStartPre=/bin/rm -f %t/kickstart.pid %t/kickstart.ctr-id
+ExecStartPre=/bin/rm -f %t/dnsapi.pid %t/dnsapi.ctr-id
 ExecStartPre=-runagent discover-smarthost
 ExecStart=/usr/bin/podman run \
     --detach \
-    --conmon-pidfile=%t/kickstart.pid \
-    --cidfile=%t/kickstart.ctr-id \
+    --conmon-pidfile=%t/dnsapi.pid \
+    --cidfile=%t/dnsapi.ctr-id \
     --cgroups=no-conmon \
     --replace --name=%N \
     --publish=127.0.0.1:${TCP_PORT}:8080 \
     --env-file=smarthost.env \
     ${ECHO_SERVER_IMAGE}
-ExecStop=/usr/bin/podman stop --ignore --cidfile %t/kickstart.ctr-id -t 10
-ExecStopPost=/usr/bin/podman rm --ignore -f --cidfile %t/kickstart.ctr-id
-PIDFile=%t/kickstart.pid
+ExecStop=/usr/bin/podman stop --ignore --cidfile %t/dnsapi.ctr-id -t 10
+ExecStopPost=/usr/bin/podman rm --ignore -f --cidfile %t/dnsapi.ctr-id
+PIDFile=%t/dnsapi.pid
 Type=forking
 
 [Install]

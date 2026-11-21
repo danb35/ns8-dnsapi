@@ -1,100 +1,53 @@
-# ns8-kickstart
+# ns8-dnsapi
 
-This is a template module for [NethServer 8](https://github.com/NethServer/ns8-core).
-To start a new module from it:
+An HTTPS API for [NethServer 8](https://github.com/NethServer/ns8-core) that lets software
+outside the cluster (a billing or client portal such as Blesta or WHMCS, or the operator's own
+scripts) manage DNS records for the operator's customers. It holds no DNS provider code: every
+read and change goes through [ns8-dnshelper](https://github.com/danb35/ns8-dnshelper) (0.7.0 or
+later), limited by the access rules its administrator grants this module.
 
-1. Click on [Use this template](https://github.com/NethServer/ns8-kickstart/generate).
-   Name your repo with `ns8-` prefix (e.g. `ns8-mymodule`). 
-   Do not end your module name with a number, like ~~`ns8-baaad2`~~!
+See [DESIGN.md](DESIGN.md) for the design.
 
-1. Clone the repository, enter the cloned directory and
-   [configure your GIT identity](https://git-scm.com/book/en/v2/Getting-Started-First-Time-Git-Setup#_your_identity)
+## Status
 
-1. Rename some references inside the repo:
-   ```
-   modulename=$(basename $(pwd) | sed 's/^ns8-//')
-   git mv imageroot/systemd/user/kickstart.service imageroot/systemd/user/${modulename}.service
-   git mv tests/kickstart.robot tests/${modulename}.robot
-   sed -i "s/kickstart/${modulename}/g" $(find .github/ .devcontainer/ * -type f)
-   git commit -a -m "Repository initialization"
-   ```
-
-1. Edit this `README.md` file, by replacing this section with your module
-   description
-
-1. Adjust `.github/workflows` to your needs. `clean-registry.yml` might
-   need the proper list of image names to work correctly. Unused workflows
-   can be disabled from the GitHub Actions interface.
-
-1. Commit and push your local changes
+Under development: nothing of the API is built yet. The module is still the ns8-kickstart
+scaffold (an echo server behind a Traefik route), renamed to `dnsapi`.
 
 ## Install
 
 Instantiate the module with:
 
-    add-module ghcr.io/nethserver/kickstart:latest 1
+    add-module ghcr.io/danb35/dnsapi:latest 1
 
 The output of the command will return the instance name.
 Output example:
 
-    {"module_id": "kickstart1", "image_name": "kickstart", "image_url": "ghcr.io/nethserver/kickstart:latest"}
+    {"module_id": "dnsapi1", "image_name": "dnsapi", "image_url": "ghcr.io/danb35/dnsapi:latest"}
 
 ## Configure
 
-Let's assume that the kickstart instance is named `kickstart1`.
+Let's assume that the dnsapi instance is named `dnsapi1`.
 
-Launch `configure-module`, by setting the following parameters:
-- `<MODULE_PARAM1_NAME>`: <MODULE_PARAM1_DESCRIPTION>
-- `<MODULE_PARAM2_NAME>`: <MODULE_PARAM2_DESCRIPTION>
-- ...
+    api-cli run module/dnsapi1/configure-module --data '{}'
 
-Example:
+The above command starts the instance and routes the `/dnsapi` path to it. Send a test HTTP
+request to the backend service:
 
-    api-cli run module/kickstart1/configure-module --data '{}'
-
-The above command will:
-- start and configure the kickstart instance
-- (describe configuration process)
-- ...
-
-Send a test HTTP request to the kickstart backend service:
-
-    curl http://127.0.0.1/kickstart/
-
-## Smarthost setting discovery
-
-Some configuration settings, like the smarthost setup, are not part of the
-`configure-module` action input: they are discovered by looking at some
-Redis keys.  To ensure the module is always up-to-date with the
-centralized [smarthost
-setup](https://nethserver.github.io/ns8-core/core/smarthost/) every time
-kickstart starts, the command `bin/discover-smarthost` runs and refreshes
-the `state/smarthost.env` file with fresh values from Redis.
-
-Furthermore if smarthost setup is changed when kickstart is already
-running, the event handler `events/smarthost-changed/10reload_services`
-restarts the main module service.
-
-See also the `systemd/user/kickstart.service` file.
-
-This setting discovery is just an example to understand how the module is
-expected to work: it can be rewritten or discarded completely.
+    curl http://127.0.0.1/dnsapi/
 
 ## Uninstall
 
 To uninstall the instance:
 
-    remove-module --no-preserve kickstart1
+    remove-module --no-preserve dnsapi1
 
 ## Running tests locally
 
-This module uses the NS8 standard testing infrastructure. For instructions on how to run the test suite locally, refer to the [Running tests locally](https://github.com/NethServer/ns8-github-actions/blob/v1/README.md#running-tests-locally) section of the ns8-github-actions README.
+This module uses the NS8 standard testing infrastructure. For instructions on how to run the test
+suite locally, refer to the [Running tests
+locally](https://github.com/NethServer/ns8-github-actions/blob/v1/README.md#running-tests-locally)
+section of the ns8-github-actions README.
 
 ## UI translation
 
 Translated with [Weblate](https://hosted.weblate.org/projects/ns8/).
-
-To setup the translation process:
-
-- add [GitHub Weblate app](https://docs.weblate.org/en/latest/admin/code-hosting.html#code-hosting-github-notifications) to your repository
-- add your repository to [hosted.weblate.org](https://hosted.weblate.org) or ask a NethServer developer to add it to ns8 Weblate project

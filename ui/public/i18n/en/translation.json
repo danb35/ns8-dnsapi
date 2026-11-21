@@ -5,7 +5,8 @@
         "processing": "Processing...",
         "enabled": "Enabled",
         "disabled": "Disabled",
-        "save": "Save"
+        "save": "Save",
+        "type_to_confirm": "Type {name} to confirm"
     },
     "status": {
         "title": "Status",
@@ -140,7 +141,7 @@
         "col_keys": "Keys",
         "col_status": "Status",
         "remove_title": "Remove tenant",
-        "remove_description": "{name} and its {keys} keys will be removed, and its zones unassigned. The records in its zones are not changed. The keys stop working at once."
+        "remove_description": "{name} will be removed, and its zones unassigned. The records in its zones are not changed. | {name} and its key will be removed, and its zones unassigned. The records in its zones are not changed, and the key stops working at once. | {name} and its {keys} keys will be removed, and its zones unassigned. The records in its zones are not changed, and the keys stop working at once."
     },
     "keys": {
         "title": "Keys",

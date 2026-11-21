@@ -138,7 +138,7 @@
       :title="$t('tenants.remove_title')"
       :warning="core.$t('common.please_read_carefully')"
       :description="
-        $t('tenants.remove_description', {
+        $tc('tenants.remove_description', current ? current.keys : 0, {
           name: current ? current.name : '',
           keys: current ? current.keys : 0,
         })

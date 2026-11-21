@@ -47,6 +47,9 @@
           class="mg-bottom-md"
           ref="owner"
         >
+          <cv-select-option value="" disabled hidden>{{
+            $t("keys.owner_placeholder")
+          }}</cv-select-option>
           <cv-select-option
             v-for="o in ownerOptions"
             :key="o.value"

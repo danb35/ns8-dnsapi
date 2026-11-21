@@ -137,7 +137,8 @@ Take screenshots of the pages
     END
     Go To    https://${NODE_ADDR}/cluster-admin/#/apps/${module_id}?page=keys
     Wait For Elements State    iframe >>> h2 >> text="Keys"    visible    timeout=20s
-    Click    iframe >>> button >> text="Create key"
+    # the dialog's own primary button says "Create key" too
+    Click    iframe >>> button >> text="Create key" >> nth=0
     Wait For Elements State    iframe >>> text="Create a key"    visible    timeout=10s
     Sleep    2s
     Take Screenshot    filename=${OUTPUT DIR}/browser/screenshot/6._Create_key.png

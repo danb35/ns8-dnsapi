@@ -173,6 +173,51 @@ A typical setup for internal hosts:
 The CA validates against the zone's public name servers, so the zones must be public, even when
 the hosts are not. NS8's own Let's Encrypt certificates (Traefik) are unrelated to this.
 
+## The API host name in DNS
+
+Decision (2026-11-21, from the operator): the API's host name is usually in a zone dnshelper
+manages. `configure-module` then publishes it itself, so that the Let's Encrypt certificate that
+`set-route` requests can be issued without the administrator adding the record by hand.
+
+- **The record** is a CNAME from the host name to the node's own host name, which the node's
+  `get-fqdn` action returns (as ns8-automx does; it needs the `node:reader` role). A CNAME follows
+  the node if its address changes, and dnsapi cannot reliably know the node's public address
+  (it may be behind NAT), so no A or AAAA record is made. A host name at a zone's apex cannot have
+  a CNAME, so it is left to the administrator.
+- **Before `set-route`**, in `configure-module`, when `publish_host_record` is on (default on):
+  1. `has-zone` with the record (`{"name": <host>, "type": "CNAME"}`): whether dnshelper manages
+     a zone containing the host name and whether its rules let dnsapi write that CNAME, decided
+     from the rules without contacting the DNS host. Not managed, not permitted, or the apex:
+     nothing is written, and the Status and Settings pages say why.
+  2. `get-records` for the name: a CNAME to the node already there, nothing to do; nothing
+     there, the CNAME is added (`append-records`, without `on_behalf_of`, so dnshelper records
+     dnsapi as its owner and the Records page shows whose it is); anything else, such as another
+     CNAME or an A record, is never overwritten: it is reported as a conflict and the route is
+     set up as before. A record dnshelper's rules do not let dnsapi read can be invisible here;
+     adding the CNAME beside it is refused by dnshelper (`conflict`), and reported the same way.
+  3. After adding the record, when a Let's Encrypt certificate is requested, wait (at most 90 s)
+     until `check-propagation` reports that the zone's name servers answer with it. A name that
+     was looked up before it existed can be cached as absent, and `lets_encrypt_check` makes
+     `set-route` fail the action if the certificate is not issued at once. If the wait runs out,
+     `set-route` is tried anyway.
+- **Nothing here fails `configure-module`**: dnshelper missing or not answering, a missing rule
+  or a conflict only change what the pages report. The result is kept in `state/host-record.json`
+  (`status`: `ok`, `created`, `conflict`, `not_managed`, `not_permitted`, `apex`, `disabled`,
+  `error`), and `get-configuration` and `get-overview` return it.
+- **The rule it needs**: a dnshelper rule for `module/dnsapi1`, write, names `<host label>`,
+  types `CNAME`. The "API module (all records)" preset on the zone covers it too.
+- **Reserved name.** A zone that holds the API host name may also be assigned to a tenant, in full
+  or in part. A key of that tenant could otherwise point the API's name elsewhere, or get a
+  certificate for it through `_acme-challenge.<host>`, and so collect the keys sent to the API.
+  The service refuses any change through the API to records at the host name or at
+  `_acme-challenge.<host>` (403 `reserved_name`), for every key, the operator's included; reads
+  are not restricted.
+- **When the host name changes**, the old name's record is left as it is: deleting a live record
+  automatically could break something else that uses it. The administrator removes it on
+  dnshelper's Records page, where it is listed as dnsapi's.
+- **After a restore to another node**, the existing CNAME points to the old node; it is reported
+  as a conflict, not changed.
+
 ## Security
 
 - **Transport:** a Traefik route on a dedicated host name (`set-route`: `host`, `lets_encrypt`,
@@ -180,6 +225,9 @@ the hosts are not. NS8's own Let's Encrypt certificates (Traefik) are unrelated 
   ns8-traefik since 3.0.0, verified in its `set-route` schema), so an operator whose only client is
   their billing server can close the API to everyone else at Traefik. The service listens on
   127.0.0.1 on a port from `org.nethserver.tcp-ports-demand`.
+- **The API host name's own DNS record** (decision 2026-11-21, from the operator): see
+  [The API host name in DNS](#the-api-host-name-in-dns). The name is reserved: no API key may
+  change its records, or `_acme-challenge.<host>`, whatever the key's zones.
 - **Per-key IP allowlist:** enforced by the service, using the client address Traefik forwards.
   Verified on the test node (2026-11-21, ns8-traefik 4.2.5): with no trusted proxies, Traefik
   drops a client's `X-Forwarded-For` and `X-Real-Ip` and sends its own peer's address in both, so
@@ -272,7 +320,9 @@ the hosts are not. NS8's own Let's Encrypt certificates (Traefik) are unrelated 
 
 ## Module plumbing
 
-- Image labels: `org.nethserver.authorizations=dnshelper@any:dnswriter traefik@node:routeadm`;
+- Image labels: `org.nethserver.authorizations=dnshelper@any:dnswriter traefik@node:routeadm
+  node:reader` (`node:reader` for the node's `get-fqdn`, see [The API host name in
+  DNS](#the-api-host-name-in-dns));
   `org.nethserver.tcp-ports-demand=1`; `min-core` at least dnshelper's (3.23.0 for 0.7.0).
   - `@any`, not `@cluster`. A `@cluster` grant follows the cluster's default dnshelper instance.
     ns8-core never picks a new default once that instance is removed, so after a second dnshelper
@@ -502,7 +552,10 @@ wraps the task events in one promise, as theirs do):
    - Not covered: a Let's Encrypt certificate for the API's own host name (no public DNS record
      for the test host name), and `owned_by` for a record another module wrote through its own
      rule (only a record dnsapi wrote without `on_behalf_of`).
-7. Phase 2 (delegated zones), then phase 3 (PowerDNS hosting), as needed.
+7. The API host name in DNS: the CNAME to the node before `set-route`, the reserved name, the
+   Status and Settings pages; a node test with a real Let's Encrypt certificate for the API's
+   host name.
+8. Phase 2 (delegated zones), then phase 3 (PowerDNS hosting), as needed.
 
 ## Open questions
 

@@ -5,10 +5,13 @@ cluster (a billing or client portal such as Blesta or WHMCS, or the operator's o
 manage DNS records for the operator's customers. It is a dnshelper consumer like any other module:
 it holds no DNS provider code and talks to DNS hosts only through dnshelper's actions.
 
-This file lives in the dnshelper repository until the module has its own repository, where it
-becomes that repository's DESIGN.md. The dnshelper side is in DESIGN.md, "Delegated access for an
-API module". Items marked **VERIFY** were not confirmed from
-the sources or on a node.
+The dnshelper side is in
+[dnshelper's DESIGN.md](https://github.com/danb35/ns8-dnshelper/blob/master/DESIGN.md#delegated-access-for-an-api-module-draft),
+"Delegated access for an API module". Items marked **VERIFY** were not confirmed from the sources
+or on a node.
+
+Status: design only; nothing of this module is built yet. dnshelper's side, phase 1, is released
+in dnshelper 0.7.0 (2026-11-21), which this module needs at least.
 
 Origin: forum request, community.nethserver.org topic 28774, posts 32-37 (2026-11-18/20).
 
@@ -18,7 +21,7 @@ Origin: forum request, community.nethserver.org topic 28774, posts 32-37 (2026-1
   zones; record reads and changes through dnshelper; an NS8 admin UI to manage tenants, zones and
   keys.
 - **Later (phase 2):** the operator's tool adds domains and their DNS provider credentials through
-  the API. Needs the dnshelper changes in DESIGN.md, phase 2.
+  the API. Needs the dnshelper changes in its DESIGN.md, phase 2 (not built).
 - **Later (phase 3):** creating zones on ns8-powerdns ("DNS hosting by the operator"). Needs an
   ns8-powerdns change too.
 - **Deferred:** a control panel the operator's customers log into (OIDC, TOTP). It would sit on
@@ -42,8 +45,9 @@ means:
 - **Tenant:** one of the operator's customers. Id (`t<8 hex>`), name, enabled flag, zones.
 - **Zone assignment:** a zone managed by dnshelper, given to at most one tenant. A tenant sees and
   changes only its own zones. The zones dnsapi may assign are the ones dnshelper's policy lets it
-  write (DESIGN.md, phase 1). The NS8 administrator decides that on dnshelper's Access page, and
-  dnsapi cannot widen it.
+  write in full: `list-zones` and `has-zone` report `"full": true` for a zone where one write rule
+  allows every name and type (dnshelper 0.7.0). The NS8 administrator grants that on dnshelper's
+  Access page, with the "API module (all records)" preset, and dnsapi cannot widen it.
 - **API key:** belongs to either the operator or one tenant.
   - Operator key: manages tenants and assignments, and acts on any tenant's zones. This is the key
     a billing portal uses: it acts for whichever customer is logged into it.
@@ -75,9 +79,9 @@ and SOA read-only.
 | `POST /v1/zones/{zone}/records` `{records, dry_run}` | write | `append-records` |
 | `PUT /v1/zones/{zone}/rrsets` `{records, dry_run}` | write | `set-records` mode `rrset` |
 | `DELETE /v1/zones/{zone}/records` `{records, dry_run}` | write | `delete-records` |
-| `GET /v1/zones/{zone}/propagation?name=&type=` | any | `check-propagation` (admin only today; DESIGN.md phase 1 opens it to modules) |
+| `GET /v1/zones/{zone}/propagation?name=&type=` | any | `check-propagation` (in dnshelper's `dnsreader` role since 0.7.0) |
 | `GET/POST/PATCH/DELETE /v1/tenants[/{id}]` | operator | none (dnsapi's own state) |
-| `PUT/DELETE /v1/tenants/{id}/zones/{zone}` | operator | `has-zone` checks that dnsapi may write it |
+| `PUT/DELETE /v1/tenants/{id}/zones/{zone}` | operator | `has-zone` checks that dnsapi may write all of it (`full`) |
 | `POST/DELETE /v1/tenants/{id}/keys[/{key id}]` | operator | none |
 | `GET /v1/status` | none | none (liveness only, says nothing about zones) |
 
@@ -122,7 +126,7 @@ Phase 2 adds `POST /v1/zones` (add a domain with a provider and credentials) and
     A tenant who edits a module's record takes it over, as an administrator's edit does.
 - **Audit:** one journald line per request that changes anything: key id, tenant, zone, records
   added and removed, outcome. Never the key. dnshelper records the same change with
-  `on_behalf_of` (DESIGN.md), so its snapshot history and audit line name the tenant too.
+  `on_behalf_of` (dnshelper 0.7.0), so its snapshot history and audit line name the tenant too.
 - **Blast radius of a compromise:** the attacker gets the module's NS8 identity, which is
   dnshelper's `dnswriter` role limited by its policy rules, plus Traefik `routeadm` on the node.
   The `routeadm` grant is the wider of the two: it covers every route on the node, not only this
@@ -155,11 +159,21 @@ Phase 2 adds `POST /v1/zones` (add a domain with a provider and credentials) and
   to allow 60 s.
 - **Discovery:** dnshelper through `agent.list_service_providers(rdb, 'dnshelper')`, as every
   consumer does. The API is unavailable (503) while dnshelper is missing.
+- **dnshelper older than 0.7.0** returns no `access`/`full` from `list-zones` and has no
+  `apply-changes` in `dnswriter`. dnsapi then offers no zones, and the Status page says that
+  dnshelper needs updating, rather than guessing what the old rules allow.
 
 ## Module plumbing
 
-- Image labels: `org.nethserver.authorizations=dnshelper@cluster:dnswriter traefik@node:routeadm`;
-  `org.nethserver.tcp-ports-demand=1`; `min-core` at least dnshelper's.
+- Image labels: `org.nethserver.authorizations=dnshelper@any:dnswriter traefik@node:routeadm`;
+  `org.nethserver.tcp-ports-demand=1`; `min-core` at least dnshelper's (3.23.0 for 0.7.0).
+  - `@any`, not `@cluster`. A `@cluster` grant follows the cluster's default dnshelper instance.
+    ns8-core never picks a new default once that instance is removed, so after a second dnshelper
+    is installed and the first removed, a `@cluster` module is granted nothing. This was seen on the
+    test node with ns8-automx; see dnshelper's DESIGN.md, Authorization, and its user guide.
+  - `@any` grants `dnswriter` on every dnshelper instance. That gives no access by itself: each
+    instance's policy is default deny until its administrator adds a rule for dnsapi.
+  - With more than one dnshelper, dnsapi uses the one discovery finds first (open question 7).
 - State (all in `state-include.conf`): `state/tenants.json` (tenants and zone assignments),
   `state/keys.json` (key ids, hashes, scopes, allowlists, mode 0600), `state/settings.json`.
   Secrets are never in `state/environment`. A restore brings keys back as they were, so restored
@@ -187,8 +201,8 @@ This is not the customer control panel: only cluster administrators can reach it
 
 1. Scaffold from ns8-kickstart; route via Traefik; `GET /v1/status`.
 2. Tenants, keys, authentication, rate limits; the read endpoints.
-3. Write endpoints over `apply-changes`, `append-records`, `set-records`, `delete-records`; the
-   dnshelper phase 1 changes released first.
+3. Write endpoints over `apply-changes`, `append-records`, `set-records`, `delete-records`
+   (dnshelper's phase 1: released in 0.7.0).
 4. Admin UI; OpenAPI document; README with a Blesta/WHMCS-style walk-through.
 5. Node test: two tenants, isolation (a tenant key cannot read or write the other tenant's zone),
    a zone dnshelper's policy does not grant, rate limits, key revocation.
@@ -208,3 +222,5 @@ This is not the customer control panel: only cluster administrators can reach it
 5. **Tenant-level restrictions** (record types, names), like dnshelper's policy rules. v1: none
    beyond the safety rails.
 6. **Customer control panel:** this module's own UI with OIDC, or a separate module? Deferred.
+7. **More than one dnshelper instance.** Use the first one discovery finds, or let the
+   administrator choose one in Settings? v1: the first, shown on the Status page.

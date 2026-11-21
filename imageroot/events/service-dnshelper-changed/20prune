@@ -6,9 +6,16 @@
 #
 
 # dnshelper's zones changed (published on zone add, change or remove). Drop
-# the assignments of zones dnsapi may no longer write in (DESIGN.md,
-# Module plumbing, Events). Only after a successful list-zones: a dnshelper
-# that does not answer must not empty every tenant. Never fails.
+# the assignments of zones dnshelper no longer manages (DESIGN.md, Module
+# plumbing, Events). Never fails.
+#
+# A zone dnshelper still manages but dnsapi may not write in right now stays
+# assigned: the API refuses it anyway, and the cause is often temporary. After
+# a restore the module has a new id (dnsapi2 becomes dnsapi3) while
+# dnshelper's rules still name the old one, so every zone looks unwritable
+# until the administrator updates the rules; dropping them then would empty
+# every tenant (found on the test node, 2026-11-21). A zone is dropped only
+# when has-zone says dnshelper does not manage it; any error keeps it.
 
 import os
 import sys
@@ -23,18 +30,25 @@ try:
     if target is None:
         sys.exit(0)
     writable = dnshelper.writable_zones(target)
+    assigned = {z for t in state.tenants().values() for z in t.get("zones", [])}
+    gone = set()
+    for zone in sorted(assigned - set(writable)):
+        answer = dnshelper.call(target, "has-zone", {"name": zone})
+        if answer.get("managed") is False:
+            gone.add(zone)
 except Exception as exc:
     print(agent.SD_WARNING + f"not pruning zone assignments: {exc}", file=sys.stderr)
     sys.exit(0)
 
+if not gone:
+    sys.exit(0)
 with state.locked():
     tenants = state.tenants()
     dropped = []
     for tenant_id, tenant in tenants.items():
-        keep = [z for z in tenant.get("zones", []) if z in writable]
-        dropped += [(tenant_id, z) for z in tenant.get("zones", []) if z not in writable]
-        tenant["zones"] = keep
+        dropped += [(tenant_id, z) for z in tenant.get("zones", []) if z in gone]
+        tenant["zones"] = [z for z in tenant.get("zones", []) if z not in gone]
     if dropped:
         state.save_tenants(tenants)
 for tenant_id, zone in dropped:
-    state.audit("prune-zone", tenant=tenant_id, zone=zone, reason="not writable")
+    state.audit("prune-zone", tenant=tenant_id, zone=zone, reason="no longer in dnshelper")

@@ -237,7 +237,7 @@ class Api:
             name = record["name"].strip().lower().rstrip(".") or "@"
             if name in reserved:
                 raise ApiError(HTTPStatus.FORBIDDEN, "reserved_name",
-                               f"{record['name']} is the API's own host name and cannot be changed through the API",
+                               f"{record['name']} belongs to the API's own host name and cannot be changed through the API",
                                field=f"{field}[{index}]")
 
     def require_covered(self, req, records, field):

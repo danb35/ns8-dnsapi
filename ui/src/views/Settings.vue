@@ -127,6 +127,7 @@
 <script>
 import to from "await-to-js";
 import { mapState } from "vuex";
+import DnsapiService from "../mixins/dnsapi";
 import {
   QueryParamService,
   UtilService,
@@ -138,6 +139,7 @@ import {
 export default {
   name: "Settings",
   mixins: [
+    DnsapiService,
     TaskService,
     IconService,
     UtilService,

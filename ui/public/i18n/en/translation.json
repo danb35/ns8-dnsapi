@@ -242,7 +242,7 @@
         "title_not_managed": "The host name's zone is not in dnshelper",
         "description_not_managed": "Add a record for {host} that points to this node at your DNS host.",
         "title_not_permitted": "dnsapi may not publish the host name",
-        "description_not_permitted": "To let dnsapi add the CNAME, add a rule on dnshelper's Access page: write, names {host} relative to {zone}, type CNAME. Or add a record for {host} pointing to this node yourself.",
+        "description_not_permitted": "To let dnsapi add the CNAME, add a rule on dnshelper's Access page for zone {zone}: write, name {name}, type CNAME. Or add a record for {host} that points to this node yourself.",
         "title_apex": "The host name is a zone's apex",
         "description_apex": "{host} cannot have a CNAME. Add an A or AAAA record for it that points to this node yourself.",
         "title_error": "The host name's DNS record could not be checked",

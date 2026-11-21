@@ -156,10 +156,17 @@ export default {
         apex: "info",
         error: "warning",
       };
+      const zone = record.zone || "";
+      const host = record.host || "";
       const params = {
-        host: record.host,
+        host,
+        // the host name relative to its zone, as dnshelper's rules name it
+        name:
+          zone && host.endsWith("." + zone)
+            ? host.slice(0, -zone.length - 1)
+            : host,
         target: record.target || "",
-        zone: record.zone || "",
+        zone,
         existing: (record.existing || []).join(", "),
         message: record.message || "",
       };

@@ -9,6 +9,7 @@
 
 import concurrent.futures
 import ipaddress
+import json
 import logging
 import re
 import threading
@@ -27,6 +28,8 @@ KEY_ID_RE = re.compile(r"^[0-9a-f]{8}$")
 ZONE_RE = re.compile(r"^(?=.{3,253}$)([a-z0-9_]([a-z0-9_-]{0,61}[a-z0-9_])?\.)+[a-z0-9-]{2,63}$")
 RECORD_TYPE_RE = re.compile(r"^[A-Za-z0-9]{1,10}$")
 ZONES_CACHE_SECONDS = 30.0
+MAX_RECORDS = 100  # dnshelper's limit per change
+RECORD_FIELDS = {"name", "type", "ttl", "data"}
 
 # dnshelper and dnsapi error codes -> HTTP status (DESIGN.md: 400 validation,
 # 403 permission, 404 unknown zone, 409 stale or conflict, 502 provider failure)
@@ -319,6 +322,148 @@ class Api:
         output = self.dnshelper(req, "check-propagation", {"zone": zone, "name": name, "type": rtype})
         return HTTPStatus.OK, output
 
+    # record changes (write keys)
+
+    def records_param(self, body, field, required_keys, max_items=MAX_RECORDS, allow_empty=False):
+        """A list of records from the request body, with only the fields dnshelper takes."""
+        records = body.get(field, [] if allow_empty else None)
+        if not isinstance(records, list) or (not records and not allow_empty):
+            raise ApiError(HTTPStatus.BAD_REQUEST, "invalid_request",
+                           f"{field} must be a non-empty list of records", field=field)
+        if len(records) > max_items:
+            raise ApiError(HTTPStatus.BAD_REQUEST, "invalid_request",
+                           f"At most {max_items} records per request", field=field)
+        clean = []
+        for index, record in enumerate(records):
+            where = f"{field}[{index}]"
+            if not isinstance(record, dict):
+                raise ApiError(HTTPStatus.BAD_REQUEST, "invalid_request", "A record is an object", field=where)
+            unknown = set(record) - RECORD_FIELDS
+            if unknown:
+                raise ApiError(HTTPStatus.BAD_REQUEST, "invalid_request",
+                               f"Unknown field {sorted(unknown)[0]}", field=where)
+            for key in required_keys:
+                if key not in record:
+                    raise ApiError(HTTPStatus.BAD_REQUEST, "invalid_request", f"{key} is required",
+                                   field=f"{where}.{key}")
+            for key in ("name", "type", "data"):
+                if key in record and not isinstance(record[key], str):
+                    raise ApiError(HTTPStatus.BAD_REQUEST, "invalid_request", f"{key} is a string",
+                                   field=f"{where}.{key}")
+            if "name" in record and not record["name"]:
+                raise ApiError(HTTPStatus.BAD_REQUEST, "invalid_request", "name is empty", field=f"{where}.name")
+            if "type" in record and not RECORD_TYPE_RE.match(record["type"]):
+                raise ApiError(HTTPStatus.BAD_REQUEST, "invalid_request", "Not a record type", field=f"{where}.type")
+            if "ttl" in record and (not isinstance(record["ttl"], int) or isinstance(record["ttl"], bool)
+                                    or record["ttl"] < 0):
+                raise ApiError(HTTPStatus.BAD_REQUEST, "invalid_request", "ttl is a whole number of seconds",
+                               field=f"{where}.ttl")
+            clean.append({k: record[k] for k in ("name", "type", "ttl", "data") if k in record})
+        return clean
+
+    def change(self, req, action, data):
+        """Run a dnshelper write and answer with its changes, plus a warning for each
+        record it removes that another module wrote (DESIGN.md, Security, Records
+        written by other modules)."""
+        self.require_write(req)
+        zone = self.reachable_zone(req)
+        dry_run = req.body.get("dry_run", False)
+        if not isinstance(dry_run, bool):
+            raise ApiError(HTTPStatus.BAD_REQUEST, "invalid_request", "dry_run is true or false", field="dry_run")
+        tenant = req.principal.owner if not req.principal.is_operator else self.store.zone_tenant(zone)
+        data = {"zone": zone, **data, "dry_run": dry_run,
+                # dnshelper records it in its audit line and the zone's history,
+                # and records no owner for what a tenant writes.
+                "on_behalf_of": f"{tenant or 'operator'}:{req.principal.key_id}"}
+        self.charge(req, 2)
+        # Before the write: dnshelper forgets a record's owner when it is removed.
+        try:
+            owners = self.dnshelper(req, "list-owners", {"zone": zone}).get("owners", [])
+        except ApiError as exc:
+            log.warning("list-owners for %s failed: %s", zone, exc.code)
+            owners = []
+        outcome = "failed"
+        output = {}
+        try:
+            output = self.dnshelper(req, action, data)
+            outcome = "dry-run" if dry_run else "ok"
+        except ApiError as exc:
+            outcome = "rejected" if exc.status < 500 else "failed"
+            self.change_audit(req, action, zone, tenant, data, None, f"{outcome}:{exc.code}")
+            raise
+        changes = output.get("changes") or {"add": [], "remove": []}
+        self.change_audit(req, action, zone, tenant, data, changes, outcome)
+        owned = {}
+        for owner in owners:
+            callers = [c.split("/", 1)[-1] for c in owner.get("callers", [])]
+            if callers:
+                owned[(owner["name"].lower(), owner["type"].upper(), owner["data"])] = callers
+        warnings = []
+        for record in changes.get("remove", []):
+            modules = owned.get((record["name"].lower(), record["type"].upper(), record["data"]))
+            if modules:
+                warnings.append({
+                    "code": "owned_by_module",
+                    "record": record,
+                    "modules": modules,
+                    "message": f"{', '.join(modules)} wrote this record and may write it again",
+                })
+        return HTTPStatus.OK, {
+            "zone": zone,
+            "dry_run": output.get("dry_run", dry_run),
+            "changes": changes,
+            "warnings": warnings,
+            "records": output.get("records", []),
+        }
+
+    def change_audit(self, req, action, zone, tenant, data, changes, outcome):
+        def show(records):
+            return json.dumps([f"{r['name']} {r.get('type', '*')} {r.get('data', '*')}" for r in records])
+
+        if changes is None:
+            added, removed = data.get("add", data.get("records", [])), data.get("remove", [])
+            if action == "delete-records":
+                added, removed = [], data.get("records", [])
+        else:
+            added, removed = changes.get("add", []), changes.get("remove", [])
+        log.info('dnsapi audit: key="%s" tenant="%s" address="%s" action="%s" zone="%s" add=%s remove=%s '
+                 'result="%s"', req.principal.key_id, tenant or "", req.client_ip, action, zone,
+                 show(added), show(removed), outcome)
+
+    def apply_changes(self, req):
+        self.require_write(req)
+        body = self.body_object(req)
+        add = self.records_param(body, "add", ("name", "type", "data"), allow_empty=True)
+        remove = self.records_param(body, "remove", ("name", "type", "data"), allow_empty=True)
+        if not add and not remove:
+            raise ApiError(HTTPStatus.BAD_REQUEST, "invalid_request", "Nothing to add or remove")
+        if len(add) + len(remove) > MAX_RECORDS:
+            raise ApiError(HTTPStatus.BAD_REQUEST, "invalid_request", f"At most {MAX_RECORDS} records per change")
+        data = {}
+        if add:
+            data["add"] = add
+        if remove:
+            data["remove"] = remove
+        return self.change(req, "apply-changes", data)
+
+    def append_records(self, req):
+        self.require_write(req)
+        body = self.body_object(req)
+        return self.change(req, "append-records",
+                           {"records": self.records_param(body, "records", ("name", "type", "data"))})
+
+    def set_rrsets(self, req):
+        self.require_write(req)
+        body = self.body_object(req)
+        return self.change(req, "set-records",
+                           {"records": self.records_param(body, "records", ("name", "type", "data")),
+                            "mode": "rrset"})
+
+    def delete_records(self, req):
+        self.require_write(req)
+        body = self.body_object(req)
+        return self.change(req, "delete-records", {"records": self.records_param(body, "records", ("name",))})
+
     # tenants (operator keys)
 
     def tenant_param(self, req):
@@ -458,7 +603,9 @@ TENANT = r"(?P<tenant>[^/]+)"
 # (pattern, {method: Api method name}); /v1/status is answered in app.py.
 ROUTES = [
     (r"/v1/zones", {"GET": "list_zones"}),
-    (rf"/v1/zones/{ZONE}/records", {"GET": "get_records"}),
+    (rf"/v1/zones/{ZONE}/records", {"GET": "get_records", "POST": "append_records", "DELETE": "delete_records"}),
+    (rf"/v1/zones/{ZONE}/changes", {"POST": "apply_changes"}),
+    (rf"/v1/zones/{ZONE}/rrsets", {"PUT": "set_rrsets"}),
     (rf"/v1/zones/{ZONE}/propagation", {"GET": "get_propagation"}),
     (r"/v1/tenants", {"GET": "list_tenants", "POST": "add_tenant"}),
     (rf"/v1/tenants/{TENANT}", {"GET": "get_tenant", "PATCH": "update_tenant", "DELETE": "remove_tenant"}),

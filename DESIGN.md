@@ -10,9 +10,9 @@ The dnshelper side is in
 "Delegated access for an API module". Items marked **VERIFY** were not confirmed from the sources
 or on a node.
 
-Status: build order steps 1 and 2 are done (the service and its route; tenants, keys,
-authentication, rate limits and the read endpoints); the write endpoints and the admin UI are
-design. dnshelper's side, phase 1, is released in dnshelper 0.7.0 (2026-11-21), which this
+Status: build order steps 1 to 3 are done (the service and its route; tenants, keys,
+authentication, rate limits and the read endpoints; the write endpoints); the ACME additions and
+the admin UI are design. dnshelper's side, phase 1, is released in dnshelper 0.7.0 (2026-11-21), which this
 module needs at least.
 
 Origin: forum request, community.nethserver.org topic 28774, posts 32-37 (2026-11-18/20). The
@@ -357,7 +357,18 @@ This is not the customer control panel: only cluster administrators can reach it
      parallel), propagation in 5 s. Not tested on a node: `owned_by`, because the zone had no
      record another module wrote (the unit tests cover it).
 3. Write endpoints over `apply-changes`, `append-records`, `set-records`, `delete-records`
-   (dnshelper's phase 1: released in 0.7.0).
+   (dnshelper's phase 1: released in 0.7.0). **Done** (2026-11-21):
+   - `POST .../changes`, `POST .../records`, `PUT .../rrsets` (mode `rrset`), `DELETE .../records`.
+     A write key is checked before the body is read; the body is checked (records at most 100,
+     only `name`, `type`, `ttl`, `data`) before anything is sent, and dnsapi builds dnshelper's
+     input itself, so a client cannot set `zone` or `on_behalf_of`.
+   - `on_behalf_of` is `<tenant>:<key id>`: the zone's tenant, also for an operator key, or
+     `operator` for a zone without a tenant.
+   - `list-owners` is read before the write, because dnshelper forgets a record's owner when it is
+     removed; the warnings come from what dnshelper reports it removes (`changes.remove`), so they
+     are the same for a dry run and the write. A write counts twice against the rate limit.
+   - Every change, including a refused one, logs one audit line: key, tenant, address, action,
+     zone, records added and removed, outcome.
 4. ACME DNS-01: key restrictions, zones with partial access, `/v1/acme/present` and `/cleanup`;
    README walk-throughs for lego, acme.sh and certbot.
 5. Admin UI; OpenAPI document; README with a Blesta/WHMCS-style walk-through.

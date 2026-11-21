@@ -128,6 +128,16 @@ Check that the zones endpoint reports dnshelper missing
     Should Be Equal As Integers    ${status}    503
     Should Be Equal    ${body}[error][code]    dnshelper_missing
 
+Check that a read key cannot change records
+    ${status}    ${body} =    Call API    POST    /v1/zones/example.test/records    ${TENANT_KEY}    {"records": [{"name": "www", "type": "A", "data": "192.0.2.1"}]}
+    Should Be Equal As Integers    ${status}    403
+    Should Be Equal    ${body}[error][code]    insufficient_scope
+
+Check that a change reports dnshelper missing
+    ${status}    ${body} =    Call API    POST    /v1/zones/example.test/changes    ${OPERATOR_KEY}    {"add": [{"name": "www", "type": "A", "data": "192.0.2.1"}], "dry_run": true}
+    Should Be Equal As Integers    ${status}    503
+    Should Be Equal    ${body}[error][code]    dnshelper_missing
+
 Check that a revoked key stops working
     ${status}    ${body} =    Call API    DELETE    /v1/tenants/${TENANT_ID}/keys/${TENANT_KEY_ID}    ${OPERATOR_KEY}
     Should Be Equal As Integers    ${status}    204

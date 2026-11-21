@@ -6,7 +6,7 @@
 #
 
 # dnshelper's zones changed (published on zone add, change or remove). Drop
-# the assignments of zones dnsapi may no longer write in full (DESIGN.md,
+# the assignments of zones dnsapi may no longer write in (DESIGN.md,
 # Module plumbing, Events). Only after a successful list-zones: a dnshelper
 # that does not answer must not empty every tenant. Never fails.
 
@@ -22,7 +22,7 @@ try:
     target = dnshelper.find_instance(rdb)
     if target is None:
         sys.exit(0)
-    full = dnshelper.full_zones(target)
+    writable = dnshelper.writable_zones(target)
 except Exception as exc:
     print(agent.SD_WARNING + f"not pruning zone assignments: {exc}", file=sys.stderr)
     sys.exit(0)
@@ -31,10 +31,10 @@ with state.locked():
     tenants = state.tenants()
     dropped = []
     for tenant_id, tenant in tenants.items():
-        keep = [z for z in tenant.get("zones", []) if z in full]
-        dropped += [(tenant_id, z) for z in tenant.get("zones", []) if z not in full]
+        keep = [z for z in tenant.get("zones", []) if z in writable]
+        dropped += [(tenant_id, z) for z in tenant.get("zones", []) if z not in writable]
         tenant["zones"] = keep
     if dropped:
         state.save_tenants(tenants)
 for tenant_id, zone in dropped:
-    state.audit("prune-zone", tenant=tenant_id, zone=zone, reason="not writable in full")
+    state.audit("prune-zone", tenant=tenant_id, zone=zone, reason="not writable")

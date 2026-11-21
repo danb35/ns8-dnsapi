@@ -10,9 +10,9 @@ See [DESIGN.md](DESIGN.md) for the design.
 
 ## Status
 
-Steps 1 to 3 of DESIGN.md's build order: the API runs behind Traefik on its own host name, with
-tenants, API keys, rate limits, and reading and changing records. The ACME additions (step 4) and
-the admin UI pages for tenants and keys (step 5) are not built yet.
+Steps 1 to 4 of DESIGN.md's build order: the API runs behind Traefik on its own host name, with
+tenants, API keys, rate limits, reading and changing records, and ACME DNS-01 validation for other
+systems. The admin UI pages for tenants and keys (step 5) are not built yet.
 
 ## Install
 
@@ -50,9 +50,15 @@ which answers `{"status": "ok"}`.
 
 ## Give dnsapi zones
 
-dnsapi can hand a tenant only a zone that dnshelper lets it write in full. On dnshelper's Access
-page, add a rule for `module/dnsapi1` with the "API module (all records)" preset on the zones the
-API may manage. Then:
+dnsapi can hand a tenant a zone that dnshelper lets it write in. On dnshelper's Access page, add a
+rule for `module/dnsapi1` on the zones the API may manage:
+
+- the "API module (all records)" preset, for a hosting customer who manages the whole zone;
+- the ACME preset, when the zone is used only for certificate validation (see
+  [ACME DNS-01 validation](#acme-dns-01-validation)).
+
+dnshelper's rule is the limit: a change it does not cover is refused (403 `not_permitted`), and
+`"full": false` in the zone lists says that the zone is only partly writable. Then:
 
     api-cli run module/dnsapi1/list-assignable-zones
 
@@ -64,7 +70,10 @@ is stored. Make the first operator key (the one a billing portal uses) from a sh
     runagent -m dnsapi1 create-key --owner operator --scope write --label "billing portal"
 
 `--allowlist 203.0.113.10,198.51.100.0/24` limits where it may be used from, `--expires
-2027-12-31T00:00:00Z` when. `api-cli run module/dnsapi1/list-keys` lists the keys and when each
+2027-12-31T00:00:00Z` when, and `--restrict acme` (or `--restrict 'www,mail' --types A,AAAA`) which
+records: names relative to the zone, with `*` and `?`, as in dnshelper's rules. A restricted key
+cannot manage tenants and keys, and a restriction cannot be changed: revoke the key and make
+another. `api-cli run module/dnsapi1/list-keys` lists the keys and when each
 was last used; `api-cli run module/dnsapi1/revoke-key --data '{"id": "<key id>"}'` revokes one.
 
 ## API
@@ -87,6 +96,10 @@ Send the key as `Authorization: Bearer <key>`. Errors are `{"error": {"code", "m
 | `PUT`, `DELETE /v1/tenants/{id}/zones/{zone}` | operator | assign, unassign a zone |
 | `GET`, `POST /v1/tenants/{id}/keys` | operator | list, make a tenant key (`{"scope", "label", "allowlist", "expires"}`); the response has the key |
 | `DELETE /v1/tenants/{id}/keys/{key id}` | operator | revoke |
+| `POST /v1/acme/present`, `POST /v1/acme/cleanup` `{"fqdn", "value"}` | write | add, remove an `_acme-challenge` TXT record; HTTP Basic authentication with the key as the password is accepted here |
+
+Making a tenant key through the API, `"restrict": "acme"` or `{"names": [...], "types": [...]}`
+limits it the same way.
 
 A record is `{"name", "type", "ttl", "data"}`, as in dnshelper: `name` relative to the zone (`@` for
 the apex), `data` in zone-file form without quotes (TXT is one plain string; MX is `"10
@@ -114,6 +127,63 @@ Calls that reach the DNS host can take as long as the host does (Hetzner: 8 to 1
         -d '{"remove": [{"name": "www", "type": "A", "data": "192.0.2.1"}],
              "add": [{"name": "www", "type": "A", "data": "192.0.2.2"}], "dry_run": true}' \
         https://dnsapi.example.com/v1/zones/example.com/changes
+
+## ACME DNS-01 validation
+
+Systems that get certificates with the DNS-01 challenge, including ones the internet cannot reach,
+can create and remove their `_acme-challenge` TXT records through dnsapi. The zone must be public
+(the CA asks its name servers); the systems only need to reach the API.
+
+Set it up once:
+
+1. On dnshelper's Access page, a rule for `module/dnsapi1` with the ACME preset on the zones the
+   certificates are for (or "API module (all records)" if the zone is also a tenant's).
+2. A tenant for those systems, with the zones:
+
+       api-cli run module/dnsapi1/add-tenant --data '{"name": "Internal hosts"}'
+       api-cli run module/dnsapi1/assign-zone --data '{"tenant": "t1a2b3c4d", "zone": "example.com"}'
+
+3. One key per system, limited to ACME records and to its address:
+
+       runagent -m dnsapi1 create-key --owner t1a2b3c4d --scope write --restrict acme \
+           --allowlist 10.0.0.5 --label "host1 certificates"
+
+**lego**, and so Traefik and Caddy, which use it, with the `httpreq` provider:
+
+    HTTPREQ_ENDPOINT=https://dnsapi.example.com/v1/acme HTTPREQ_USERNAME=acme HTTPREQ_PASSWORD=<key> \
+        HTTPREQ_HTTP_TIMEOUT=90 lego --dns httpreq -d host1.example.com -m admin@example.com run
+
+`HTTPREQ_HTTP_TIMEOUT` (seconds, default 30) leaves room for slow DNS hosts. lego's `RAW` mode is
+not supported.
+
+**acme.sh**, with the `acmeproxy` hook:
+
+    export ACMEPROXY_ENDPOINT=https://dnsapi.example.com/v1/acme ACMEPROXY_USERNAME=acme ACMEPROXY_PASSWORD=<key>
+    acme.sh --issue --dns dns_acmeproxy -d host1.example.com
+
+**certbot** has no such plugin; use hooks that call the same endpoints:
+
+    certbot certonly --manual --preferred-challenges dns \
+        --manual-auth-hook "/usr/local/bin/dnsapi-hook present" \
+        --manual-cleanup-hook "/usr/local/bin/dnsapi-hook cleanup" \
+        -d host1.example.com
+
+with `/usr/local/bin/dnsapi-hook`, and the key in `DNSAPI_KEY`:
+
+    #!/bin/sh
+    # certbot sets CERTBOT_DOMAIN and CERTBOT_VALIDATION; $1 is present or cleanup.
+    action=$1
+    curl -sf -H "Authorization: Bearer $DNSAPI_KEY" -H "Content-Type: application/json" \
+        -d "{\"fqdn\": \"_acme-challenge.$CERTBOT_DOMAIN.\", \"value\": \"$CERTBOT_VALIDATION\"}" \
+        "https://dnsapi.example.com/v1/acme/$action" >/dev/null || exit 1
+    [ "$action" = present ] && sleep 30
+    exit 0
+
+The `fqdn` must start with `_acme-challenge.`; the zone is the longest of the key's zones that
+contains it. `present` adds the value with a TTL of 60 seconds (raised by DNS hosts with a higher
+minimum) and keeps any other value, so a wildcard and its base name can be validated together.
+`cleanup` removes only that value. A CNAME on `_acme-challenge` that points outside the key's zones
+is not followed.
 
 ## Development
 

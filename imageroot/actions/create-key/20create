@@ -25,7 +25,8 @@ if request["owner"] == "operator" and state.caller() == os.environ.get("AGENT_ID
     state.fail("owner", "not_permitted", "operator", "operator keys are made by a cluster administrator")
 with state.locked():
     error = state.add_key(request["id"], request["hash"], request["owner"], request["scope"],
-                          request.get("label", ""), request.get("allowlist"), request.get("expires"))
+                          request.get("label", ""), request.get("allowlist"), request.get("expires"),
+                          request.get("restrict"))
     if error:
         state.fail(*error)
     record = state.keys()[request["id"]]

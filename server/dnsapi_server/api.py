@@ -7,7 +7,10 @@
 # through this module's own actions (its selfadm role), so the actions stay
 # the only writers of the state.
 
+import base64
+import binascii
 import concurrent.futures
+import fnmatch
 import ipaddress
 import json
 import logging
@@ -48,6 +51,24 @@ ERROR_STATUS = {
     "auth_failed": HTTPStatus.BAD_GATEWAY,
 }
 
+ACME_LABEL = "_acme-challenge"
+ACME_TTL = 60  # a provider with a higher minimum raises it
+MAX_ACME_VALUE = 255
+
+
+def restrict_covers(restrict, name, rtype):
+    """Does a key's restrict allow the record (name, rtype)? rtype None means
+    any type. The same matching as dnshelper's rules (dnshelper_lib._covers)."""
+    if not restrict:
+        return True
+    n = name.strip().lower().rstrip(".") or "@"
+    if not any(fnmatch.fnmatchcase(n, p) for p in restrict.get("names") or ["*"]):
+        return False
+    types = restrict.get("types") or ["*"]
+    if "*" in types:
+        return True
+    return rtype is not None and rtype.upper() in types
+
 
 class ApiError(Exception):
     """An error answered as {"error": {"code", "message", "field"}}."""
@@ -68,6 +89,7 @@ class Principal:
         self.key_id = key_id
         self.owner = record["owner"]
         self.scope = record["scope"]
+        self.restrict = record.get("restrict")  # None: every record of its zones
         self.tenant = tenant  # the tenant's record, or None for an operator key
 
     @property
@@ -152,6 +174,14 @@ class Api:
             raise self._unauthorized("missing_key", "An API key is required")
         scheme, _, key = authorization.partition(" ")
         key = key.strip()
+        if scheme.lower() == "basic" and req.path.startswith("/v1/acme/"):
+            # lego's httpreq and acme.sh's acmeproxy send Basic: the key is the
+            # password, the user name is not used.
+            try:
+                key = base64.b64decode(key, validate=True).decode().partition(":")[2]
+            except (binascii.Error, UnicodeDecodeError):
+                key = ""
+            scheme = "bearer"
         key_id = keyfmt.parse_key(key) if scheme.lower() == "bearer" else None
         record = self.store.keys().get(key_id) if key_id else None
         if record is None or not keyfmt.hash_matches(key, record.get("hash")):
@@ -184,6 +214,18 @@ class Api:
         if not req.principal.is_operator:
             # A tenant key does not learn that the operator endpoints exist.
             raise ApiError(HTTPStatus.NOT_FOUND, "not_found", "No such endpoint")
+        if req.principal.restrict:
+            raise ApiError(HTTPStatus.FORBIDDEN, "restricted_key",
+                           "A key limited to some records cannot manage tenants and keys")
+
+    def require_covered(self, req, records, field):
+        """Refuse a request with any record outside the key's restrict."""
+        restrict = req.principal.restrict
+        for index, record in enumerate(records):
+            if not restrict_covers(restrict, record["name"], record.get("type")):
+                what = f"{record['name']} {record.get('type') or '(any type)'}"
+                raise ApiError(HTTPStatus.FORBIDDEN, "outside_restriction",
+                               f"This key may not change {what}", field=f"{field}[{index}]")
 
     def require_write(self, req):
         if req.principal.scope != "write":
@@ -236,14 +278,16 @@ class Api:
         return output
 
     def assignable_zones(self, req):
-        """dnshelper's zones that dnsapi may write in full, cached for a short time."""
+        """dnshelper's zones that dnsapi may write in, cached for a short time: in full
+        (a hosting customer's zone) or only some records (DESIGN.md, ACME DNS-01
+        validation). dnshelper's rule stays the outer limit for each."""
         with self.zones_lock:
             cached = self.zones_cache
             if cached and self.clock() - cached[0] < ZONES_CACHE_SECONDS:
                 return cached[1]
         self.charge(req)
         output = self.dnshelper(req, "list-zones", {})
-        zones = [z for z in output.get("zones", []) if z.get("full")]
+        zones = [z for z in output.get("zones", []) if z.get("access") == "write"]
         with self.zones_lock:
             self.zones_cache = (self.clock(), zones)
         return zones
@@ -276,9 +320,10 @@ class Api:
         for z in self.assignable_zones(req):
             zone = z["zone"]
             if req.principal.is_operator:
-                result.append({"zone": zone, "provider": z.get("provider"), "tenant": assigned.get(zone)})
+                result.append({"zone": zone, "provider": z.get("provider"), "full": bool(z.get("full")),
+                               "tenant": assigned.get(zone)})
             elif assigned.get(zone) == req.principal.owner:
-                result.append({"zone": zone, "provider": z.get("provider")})
+                result.append({"zone": zone, "provider": z.get("provider"), "full": bool(z.get("full"))})
         return HTTPStatus.OK, {"zones": result}
 
     def get_records(self, req):
@@ -293,7 +338,8 @@ class Api:
         self.charge(req, 2)
         records_f = self.pool.submit(self.dnshelper, req, "get-records", data)
         owners_f = self.pool.submit(self.dnshelper, req, "list-owners", {"zone": zone})
-        records = records_f.result().get("records", [])
+        records = [r for r in records_f.result().get("records", [])
+                   if restrict_covers(req.principal.restrict, r["name"], r["type"])]
         try:
             owners = owners_f.result().get("owners", [])
         except ApiError as exc:
@@ -318,6 +364,8 @@ class Api:
             raise ApiError(HTTPStatus.BAD_REQUEST, "invalid_request", "name is required", field="name")
         if not rtype or not RECORD_TYPE_RE.match(rtype):
             raise ApiError(HTTPStatus.BAD_REQUEST, "invalid_request", "type is required", field="type")
+        if not restrict_covers(req.principal.restrict, name, rtype):
+            raise ApiError(HTTPStatus.FORBIDDEN, "outside_restriction", f"This key may not read {name} {rtype}")
         self.charge(req)
         output = self.dnshelper(req, "check-propagation", {"zone": zone, "name": name, "type": rtype})
         return HTTPStatus.OK, output
@@ -361,13 +409,16 @@ class Api:
             clean.append({k: record[k] for k in ("name", "type", "ttl", "data") if k in record})
         return clean
 
-    def change(self, req, action, data):
+    def change(self, req, action, data, zone=None, dry_run=None):
         """Run a dnshelper write and answer with its changes, plus a warning for each
         record it removes that another module wrote (DESIGN.md, Security, Records
         written by other modules)."""
         self.require_write(req)
-        zone = self.reachable_zone(req)
-        dry_run = req.body.get("dry_run", False)
+        for field in ("add", "remove", "records"):
+            self.require_covered(req, data.get(field, []), field)
+        zone = zone or self.reachable_zone(req)
+        if dry_run is None:
+            dry_run = req.body.get("dry_run", False)
         if not isinstance(dry_run, bool):
             raise ApiError(HTTPStatus.BAD_REQUEST, "invalid_request", "dry_run is true or false", field="dry_run")
         tenant = req.principal.owner if not req.principal.is_operator else self.store.zone_tenant(zone)
@@ -464,6 +515,46 @@ class Api:
         body = self.body_object(req)
         return self.change(req, "delete-records", {"records": self.records_param(body, "records", ("name",))})
 
+    # ACME DNS-01 (lego's httpreq provider, acme.sh's acmeproxy)
+
+    def acme_request(self, req):
+        """The zone and the name relative to it for {"fqdn", "value"}."""
+        self.require_write(req)
+        body = self.body_object(req)
+        fqdn, value = body.get("fqdn"), body.get("value")
+        if not isinstance(fqdn, str) or not fqdn.strip():
+            raise ApiError(HTTPStatus.BAD_REQUEST, "invalid_request", "fqdn is required", field="fqdn")
+        if not isinstance(value, str) or not value or len(value) > MAX_ACME_VALUE:
+            raise ApiError(HTTPStatus.BAD_REQUEST, "invalid_request", "value is required", field="value")
+        host = fqdn.strip().lower().rstrip(".")
+        if host.split(".", 1)[0] != ACME_LABEL or "." not in host:
+            raise ApiError(HTTPStatus.BAD_REQUEST, "invalid_request",
+                           f"fqdn must start with {ACME_LABEL}.", field="fqdn")
+        principal = req.principal
+        candidates = [z["zone"] for z in self.assignable_zones(req)]
+        if not principal.is_operator:
+            candidates = [z for z in candidates if z in principal.tenant.get("zones", [])]
+        matching = [z for z in candidates if host == z or host.endswith("." + z)]
+        if not matching:
+            raise ApiError(HTTPStatus.NOT_FOUND, "zone_not_found", "No zone of this key contains fqdn",
+                           field="fqdn")
+        zone = max(matching, key=len)
+        name = host[: -len(zone) - 1] if host != zone else "@"
+        return fqdn, value, zone, name
+
+    def acme_present(self, req):
+        fqdn, value, zone, name = self.acme_request(req)
+        record = {"name": name, "type": "TXT", "ttl": ACME_TTL, "data": value}
+        status, result = self.change(req, "append-records", {"records": [record]}, zone=zone, dry_run=False)
+        # acme.sh's acmeproxy counts the call as done when the reply contains the value.
+        return status, {"fqdn": fqdn, "value": value, "zone": zone, "changes": result["changes"]}
+
+    def acme_cleanup(self, req):
+        fqdn, value, zone, name = self.acme_request(req)
+        record = {"name": name, "type": "TXT", "data": value}
+        status, result = self.change(req, "delete-records", {"records": [record]}, zone=zone, dry_run=False)
+        return status, {"fqdn": fqdn, "value": value, "zone": zone, "changes": result["changes"]}
+
     # tenants (operator keys)
 
     def tenant_param(self, req):
@@ -490,6 +581,7 @@ class Api:
             "label": record.get("label", ""),
             "allowlist": record.get("allowlist") or [],
             "expires": record.get("expires"),
+            "restrict": record.get("restrict"),
             "created": record.get("created"),
             "last_used": self.store.last_used.get(key_id),
         }
@@ -570,7 +662,7 @@ class Api:
         # response: the action gets its hash only.
         key_id, key, key_hash = keyfmt.new_key()
         data = {"id": key_id, "hash": key_hash, "owner": tenant_id}
-        for name in ("scope", "label", "allowlist", "expires"):
+        for name in ("scope", "label", "allowlist", "expires", "restrict"):
             if name in body:
                 data[name] = body[name]
         self.own_action("create-key", data)
@@ -607,6 +699,8 @@ ROUTES = [
     (rf"/v1/zones/{ZONE}/changes", {"POST": "apply_changes"}),
     (rf"/v1/zones/{ZONE}/rrsets", {"PUT": "set_rrsets"}),
     (rf"/v1/zones/{ZONE}/propagation", {"GET": "get_propagation"}),
+    (r"/v1/acme/present", {"POST": "acme_present"}),
+    (r"/v1/acme/cleanup", {"POST": "acme_cleanup"}),
     (r"/v1/tenants", {"GET": "list_tenants", "POST": "add_tenant"}),
     (rf"/v1/tenants/{TENANT}", {"GET": "get_tenant", "PATCH": "update_tenant", "DELETE": "remove_tenant"}),
     (rf"/v1/tenants/{TENANT}/zones/{ZONE}", {"PUT": "assign_zone", "DELETE": "unassign_zone"}),

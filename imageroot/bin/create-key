@@ -8,6 +8,8 @@
 # Make an API key from a shell and print it once:
 #
 #   runagent -m dnsapi1 create-key --owner operator --scope write --label "billing portal"
+#   runagent -m dnsapi1 create-key --owner t1a2b3c4d --scope write --restrict acme \
+#       --allowlist 10.0.0.5 --label "host1 certificates"
 #
 # The secret is made here and only its hash is stored, as with the
 # create-key action, so it is never kept in Redis or in the state. This is
@@ -29,7 +31,17 @@ parser.add_argument("--scope", required=True, choices=["read", "write"])
 parser.add_argument("--label", default="")
 parser.add_argument("--allowlist", default="", help="comma-separated IP addresses or networks")
 parser.add_argument("--expires", default=None, help="ISO 8601 date-time")
+parser.add_argument("--restrict", default=None,
+                    help="limit the key to some records: a preset (acme), or name patterns with --types")
+parser.add_argument("--types", default=None, help="with --restrict <patterns>: comma-separated record types")
 args = parser.parse_args()
+restrict = None
+if args.restrict:
+    if args.restrict in state.RESTRICT_PRESETS and not args.types:
+        restrict = args.restrict
+    else:
+        restrict = {"names": [n for n in args.restrict.split(",") if n.strip()],
+                    "types": [t for t in (args.types or "*").split(",") if t.strip()]}
 
 key_id = secrets.token_hex(4)
 secret = base64.b32encode(secrets.token_bytes(32)).decode().rstrip("=").lower()
@@ -37,7 +49,7 @@ key = f"dnsapi_{key_id}_{secret}"
 allowlist = [a.strip() for a in args.allowlist.split(",") if a.strip()]
 with state.locked():
     error = state.add_key(key_id, hashlib.sha256(key.encode()).hexdigest(), args.owner, args.scope,
-                          args.label, allowlist, args.expires)
+                          args.label, allowlist, args.expires, restrict)
 if error:
     print(f"create-key: {error[0]}: {error[3]} ({error[2]})", file=sys.stderr)
     sys.exit(1)

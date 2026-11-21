@@ -13,7 +13,8 @@
         "allowlist",
         "expires",
         "created",
-        "last_used"
+        "last_used",
+        "restrict"
     ],
     "properties": {
         "id": {
@@ -57,6 +58,26 @@
                 "string",
                 "null"
             ]
+        },
+        "restrict": {
+            "type": [
+                "object",
+                "null"
+            ],
+            "properties": {
+                "names": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "types": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
         }
     }
 }

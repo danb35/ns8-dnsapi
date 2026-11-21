@@ -6,9 +6,10 @@
 #
 
 # Give a zone to a tenant. Only whole zones that dnshelper lets dnsapi write
-# in full can be assigned ("full" in list-zones, dnshelper 0.7.0): the NS8
-# administrator decides that on dnshelper's Access page, and dnsapi cannot
-# widen it. A zone belongs to at most one tenant.
+# in can be assigned (access "write" in list-zones, dnshelper 0.7.0): in full
+# for a hosting customer, or only some records, such as dnshelper's ACME
+# preset. The NS8 administrator decides that on dnshelper's Access page, and
+# dnsapi cannot widen it. A zone belongs to at most one tenant.
 
 import json
 import os
@@ -27,15 +28,15 @@ target = dnshelper.find_instance(rdb)
 if target is None:
     state.fail("zone", "dnshelper_missing", zone, "dnshelper is not installed")
 try:
-    full = dnshelper.full_zones(target)
+    writable = dnshelper.writable_zones(target)
 except dnshelper.DnshelperError as exc:
     if exc.code == "unavailable":
         print(agent.SD_ERR + f"list-zones on {target} failed", file=sys.stderr)
         sys.exit(1)
     state.fail("zone", exc.code, zone, exc.message)
-if zone not in full:
+if zone not in writable:
     state.fail("zone", "zone_not_assignable", zone,
-               "dnshelper does not let dnsapi write every record of this zone")
+               "dnshelper does not let dnsapi write in this zone")
 with state.locked():
     tenants = state.tenants()
     tenant = tenants.get(request["tenant"])

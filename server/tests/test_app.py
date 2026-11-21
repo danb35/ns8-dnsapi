@@ -64,6 +64,32 @@ class FakeBackend(Backend):
                 return {"records": [dict(r) for r in RECORDS.get(data["zone"], [])]}
             if action == "list-owners":
                 return {"zone": data["zone"], "owners": OWNERS.get(data["zone"], [])}
+            existing = RECORDS.get(data.get("zone"), [])
+
+            def same(a, b):
+                return all(a.get(k) == b.get(k) for k in ("name", "type", "data") if k in a)
+
+            def result(add, remove):
+                add = [{"ttl": 300, **r} for r in add]
+                return {"dry_run": data.get("dry_run", False), "changes": {"add": add, "remove": remove},
+                        "records": [r for r in existing if r not in remove] + add}
+
+            if action == "append-records":
+                return result(data["records"], [])
+            if action == "apply-changes":
+                remove = []
+                for wanted in data.get("remove", []):
+                    found = [r for r in existing if same(wanted, r)]
+                    if not found:
+                        raise TaskRefused([{"field": "remove", "error": "stale", "value": "",
+                                            "message": "a record to remove is no longer in the zone"}])
+                    remove += found
+                return result(data.get("add", []), remove)
+            if action == "set-records":
+                keys = {(r["name"], r["type"]) for r in data["records"]}
+                return result(data["records"], [r for r in existing if (r["name"], r["type"]) in keys])
+            if action == "delete-records":
+                return result([], [r for r in existing if any(same(w, r) for w in data["records"])])
             if action == "check-propagation":
                 return {"zone": data["zone"], "name": data["name"], "type": data["type"],
                         "records": [], "servers_from": "dns", "servers": []}
@@ -325,6 +351,112 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(statuses, [200, 429])  # 1 list-zones + 2 per records read, then refused
         resp, body = self.request("GET", "/v1/zones", "beta")
         self.assertEqual(resp.status, 200)  # the limit is per key
+
+    # record changes
+
+    def key_id(self, name):
+        return keyfmt.parse_key(self.keys[name])
+
+    def writes(self):
+        return [c for c in self.backend.calls if c[1] in
+                ("append-records", "apply-changes", "set-records", "delete-records")]
+
+    def test_read_key_cannot_write(self):
+        for method, path in (("POST", "/v1/zones/acme.test/records"), ("POST", "/v1/zones/acme.test/changes"),
+                             ("PUT", "/v1/zones/acme.test/rrsets"), ("DELETE", "/v1/zones/acme.test/records")):
+            resp, body = self.request(method, path, "acme_ro", body={"bad": True})
+            self.assertError(resp, body, 403, "insufficient_scope")
+        self.assertFalse(self.writes())
+
+    def test_append_by_tenant(self):
+        record = {"name": "shop", "type": "A", "data": "192.0.2.9"}
+        resp, body = self.request("POST", "/v1/zones/acme.test/records", "acme", body={"records": [record]})
+        self.assertEqual(resp.status, 200, body)
+        self.assertEqual(body["changes"]["add"][0]["name"], "shop")
+        self.assertEqual(body["warnings"], [])
+        agent_id, action, data = self.writes()[0]
+        self.assertEqual(action, "append-records")
+        self.assertEqual(data["on_behalf_of"], "t00000001:" + self.key_id("acme"))
+        self.assertEqual(data["dry_run"], False)
+        actions = [c[1] for c in self.backend.calls]
+        self.assertLess(actions.index("list-owners"), actions.index("append-records"))
+
+    def test_write_other_tenants_zone_is_404(self):
+        resp, body = self.request("POST", "/v1/zones/beta.test/records", "acme",
+                                  body={"records": [{"name": "x", "type": "A", "data": "192.0.2.1"}]})
+        self.assertError(resp, body, 404, "zone_not_found")
+        self.assertFalse(self.writes())
+
+    def test_edit_of_module_record_warns(self):
+        mx = {"name": "@", "type": "MX", "data": "10 mail.acme.test."}
+        new = {"name": "@", "type": "MX", "data": "10 mx.other.test."}
+        resp, body = self.request("POST", "/v1/zones/acme.test/changes", "acme",
+                                  body={"remove": [mx], "add": [new], "dry_run": True})
+        self.assertEqual(resp.status, 200, body)
+        self.assertTrue(body["dry_run"])
+        self.assertEqual(len(body["warnings"]), 1)
+        warning = body["warnings"][0]
+        self.assertEqual(warning["code"], "owned_by_module")
+        self.assertEqual(warning["modules"], ["mail1"])
+        self.assertEqual(warning["record"]["data"], "10 mail.acme.test.")
+        self.assertEqual(self.writes()[0][2]["dry_run"], True)
+
+    def test_rrset_and_delete_warn_too(self):
+        resp, body = self.request("PUT", "/v1/zones/acme.test/rrsets", "acme",
+                                  body={"records": [{"name": "@", "type": "MX", "data": "20 mx.acme.test."}]})
+        self.assertEqual(resp.status, 200, body)
+        self.assertEqual(self.writes()[-1][2]["mode"], "rrset")
+        self.assertEqual(body["warnings"][0]["modules"], ["mail1"])
+        resp, body = self.request("DELETE", "/v1/zones/acme.test/records", "acme",
+                                  body={"records": [{"name": "www"}]})
+        self.assertEqual(resp.status, 200, body)
+        self.assertEqual([r["name"] for r in body["changes"]["remove"]], ["www"])
+        self.assertEqual(body["warnings"], [])
+
+    def test_stale_remove_is_409(self):
+        resp, body = self.request("POST", "/v1/zones/acme.test/changes", "acme",
+                                  body={"remove": [{"name": "www", "type": "A", "data": "192.0.2.77"}]})
+        self.assertError(resp, body, 409, "stale")
+
+    def test_operator_writes_for_the_zones_tenant(self):
+        record = {"name": "x", "type": "TXT", "data": "hello"}
+        self.request("POST", "/v1/zones/acme.test/records", "operator", body={"records": [record]})
+        self.request("POST", "/v1/zones/free.test/records", "operator", body={"records": [record]})
+        behalf = [c[2]["on_behalf_of"] for c in self.writes()]
+        op = self.key_id("operator")
+        self.assertEqual(behalf, ["t00000001:" + op, "operator:" + op])
+
+    def test_bad_change_bodies(self):
+        cases = [
+            ("POST", "/v1/zones/acme.test/records", {"records": []}, "records"),
+            ("POST", "/v1/zones/acme.test/records", {"records": [{"name": "a", "type": "A"}]}, "records[0].data"),
+            ("POST", "/v1/zones/acme.test/records",
+             {"records": [{"name": "a", "type": "A", "data": "x", "owner": "y"}]}, "records[0]"),
+            ("POST", "/v1/zones/acme.test/records",
+             {"records": [{"name": "a", "type": "A", "data": "x", "ttl": True}]}, "records[0].ttl"),
+            ("POST", "/v1/zones/acme.test/records",
+             {"records": [{"name": "a", "type": "A-1", "data": "x"}]}, "records[0].type"),
+            ("POST", "/v1/zones/acme.test/records",
+             {"records": [{"name": "a", "type": "A", "data": "x"}] * 101}, "records"),
+            ("POST", "/v1/zones/acme.test/changes", {"add": [], "remove": []}, None),
+            ("POST", "/v1/zones/acme.test/records",
+             {"records": [{"name": "a", "type": "A", "data": "x"}], "dry_run": "yes"}, "dry_run"),
+            ("DELETE", "/v1/zones/acme.test/records", {"records": [{"type": "A"}]}, "records[0].name"),
+        ]
+        for method, path, payload, field in cases:
+            resp, body = self.request(method, path, "acme", body=payload)
+            self.assertError(resp, body, 400, "invalid_request")
+            self.assertEqual(body["error"]["field"], field, payload)
+        self.assertFalse(self.writes())
+
+    def test_client_cannot_set_on_behalf_of(self):
+        record = {"name": "x", "type": "A", "data": "192.0.2.1"}
+        resp, body = self.request("POST", "/v1/zones/acme.test/records", "acme",
+                                  body={"records": [record], "on_behalf_of": "someone", "zone": "beta.test"})
+        self.assertEqual(resp.status, 200, body)
+        data = self.writes()[0][2]
+        self.assertEqual(data["zone"], "acme.test")
+        self.assertTrue(data["on_behalf_of"].startswith("t00000001:"))
 
     # tenants (operator)
 

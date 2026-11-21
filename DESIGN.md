@@ -10,18 +10,22 @@ The dnshelper side is in
 "Delegated access for an API module". Items marked **VERIFY** were not confirmed from the sources
 or on a node.
 
-Status: build order steps 1 and 2 are done (the service and its route; tenants, keys,
-authentication, rate limits and the read endpoints); the write endpoints and the admin UI are
-design. dnshelper's side, phase 1, is released in dnshelper 0.7.0 (2026-11-21), which this
+Status: build order steps 1 to 3 are done (the service and its route; tenants, keys,
+authentication, rate limits and the read endpoints; the write endpoints); the ACME additions and
+the admin UI are design. dnshelper's side, phase 1, is released in dnshelper 0.7.0 (2026-11-21), which this
 module needs at least.
 
-Origin: forum request, community.nethserver.org topic 28774, posts 32-37 (2026-11-18/20).
+Origin: forum request, community.nethserver.org topic 28774, posts 32-37 (2026-11-18/20). The
+ACME DNS-01 use was added by the operator on 2026-11-21.
 
 ## Scope
 
 - **In:** a REST API with API keys; tenants (the operator's customers), each limited to their own
   zones; record reads and changes through dnshelper; an NS8 admin UI to manage tenants, zones and
   keys.
+- **In:** ACME DNS-01 validation for other systems, including ones the internet cannot reach: they
+  create and remove their `_acme-challenge` TXT records through dnsapi, with keys limited to those
+  records (see [ACME DNS-01 validation](#acme-dns-01-validation)).
 - **Later (phase 2):** the operator's tool adds domains and their DNS provider credentials through
   the API. Needs the dnshelper changes in its DESIGN.md, phase 2 (not built).
 - **Later (phase 3):** creating zones on ns8-powerdns ("DNS hosting by the operator"). Needs an
@@ -47,15 +51,21 @@ means:
 - **Tenant:** one of the operator's customers. Id (`t<8 hex>`), name, enabled flag, zones.
 - **Zone assignment:** a zone managed by dnshelper, given to at most one tenant. A tenant sees and
   changes only its own zones. The zones dnsapi may assign are the ones dnshelper's policy lets it
-  write in full: `list-zones` and `has-zone` report `"full": true` for a zone where one write rule
-  allows every name and type (dnshelper 0.7.0). The NS8 administrator grants that on dnshelper's
-  Access page, with the "API module (all records)" preset, and dnsapi cannot widen it.
+  write: `list-zones` and `has-zone` report `access` and `full` (dnshelper 0.7.0). `full: true`
+  means one write rule allows every name and type, as the "API module (all records)" preset on
+  dnshelper's Access page grants; that is what a hosting customer needs. A zone with a narrower
+  write rule (`access: "write"`, `full: false`), such as dnshelper's ACME preset, can be assigned
+  too, for ACME use (decision 2026-11-21, see [ACME DNS-01 validation](#acme-dns-01-validation)).
+  The NS8 administrator sets those rules, and dnsapi cannot widen them.
 - **API key:** belongs to either the operator or one tenant.
   - Operator key: manages tenants and assignments, and acts on any tenant's zones. This is the key
     a billing portal uses: it acts for whichever customer is logged into it.
   - Tenant key: reaches only that tenant's zones. For customers who script their own DNS.
   - Every key has: a scope (`read` or `write`), an optional IP allowlist (CIDR), an optional
     expiry, a label, and created and last-used times.
+  - A key can also be restricted to some names and types (`restrict`, see
+    [ACME DNS-01 validation](#acme-dns-01-validation)); by default it reaches every record of its
+    zones.
 - **Key format:** `dnsapi_<id>_<secret>`. The id (8 hex) finds the record. The secret (32 random
   bytes, base32) is stored only as its SHA-256 hash, which is enough for a random secret of that
   length. The full key is shown once, at creation; there is no way to read it back. The prefix
@@ -85,6 +95,7 @@ and SOA read-only.
 | `GET/POST/PATCH/DELETE /v1/tenants[/{id}]` | operator | none (dnsapi's own state) |
 | `PUT/DELETE /v1/tenants/{id}/zones/{zone}` | operator | `has-zone` checks that dnsapi may write all of it (`full`) |
 | `POST/DELETE /v1/tenants/{id}/keys[/{key id}]` | operator | none |
+| `POST /v1/acme/present`, `POST /v1/acme/cleanup` `{fqdn, value}` | write | `append-records`, `delete-records` of one `_acme-challenge` TXT record (see [ACME DNS-01 validation](#acme-dns-01-validation)) |
 | `GET /v1/status` | none | none (liveness only, says nothing about zones) |
 
 A tenant key that names a zone it doesn't own gets 404, not 403, so that a key cannot be used to
@@ -92,6 +103,67 @@ find out which zones are managed.
 
 Phase 2 adds `POST /v1/zones` (add a domain with a provider and credentials) and `DELETE
 /v1/zones/{zone}`, using dnshelper's delegated-zone actions.
+
+## ACME DNS-01 validation
+
+Decision (2026-11-21): dnsapi also serves systems that get certificates from Let's Encrypt (or
+another ACME CA) with the DNS-01 challenge, above all ones the internet cannot reach, so that
+HTTP-01 is impossible for them. Such a system creates a TXT record at
+`_acme-challenge.<host name>`, waits for the CA to see it, and removes it. It needs nothing else
+in the zone, so it should be able to do nothing else.
+
+The REST API already does the job: `POST .../records` to add the TXT record (adding never
+removes, so a wildcard and its base name can both have a value at the same name), `GET
+.../propagation` to wait, `DELETE .../records` with the exact value to remove it, and dnshelper's
+helper locks each zone, so two systems validating at once do not lose a value. Three additions
+make it safe and easy:
+
+1. **Keys limited to some records.** A key may carry `restrict: {"names": [...], "types": [...]}`:
+   name patterns relative to the zone (with `*` and `?`, as in dnshelper's rules) and record types.
+   The `acme` preset is `{"names": ["_acme-challenge", "_acme-challenge.*"], "types": ["TXT"]}`.
+   - dnsapi checks it before calling dnshelper. A change is refused as a whole (403
+     `outside_restriction`) if any record to add or remove is outside it; a delete without a
+     `type` needs `types` to allow every type.
+   - Reads return only the records inside it; `propagation` is refused outside it.
+   - A restricted operator key reaches the zones but not the tenant and key endpoints.
+   - It is set when the key is made and cannot be changed: revoke the key and make another.
+   - Without this, a leaked key on an internal host could rewrite every record of the zone.
+2. **Zones with partial access.** A zone whose dnshelper rule for dnsapi is narrower than full
+   (dnshelper's ACME preset: `_acme-challenge` and `_acme-challenge.*`, TXT) can be assigned, so
+   the administrator does not have to grant dnsapi the whole zone for ACME use.
+   - dnshelper's rule stays the outer limit: a change outside it is refused by dnshelper (403
+     `not_permitted`), and reads return only what it covers. dnsapi cannot see the rule's names and
+     types (`list-zones` does not report them), so it cannot refuse earlier.
+   - `GET /v1/zones`, `list-assignable-zones` and the admin UI show `full` for each zone, so an
+     operator does not hand a hosting customer a zone they can only partly change.
+3. **Endpoints for existing ACME clients.** `POST /v1/acme/present` and `POST /v1/acme/cleanup`
+   with `{"fqdn": "_acme-challenge.www.example.com.", "value": "<token>"}`, which is what lego's
+   `httpreq` provider (lego is also inside Traefik and Caddy) and acme.sh's `acmeproxy` send. The
+   client is configured with `https://<dnsapi host>/v1/acme` as its endpoint and the key as its
+   password.
+   - The fully qualified name must start with the label `_acme-challenge`. The zone is the
+     longest of the key's zones that contains it; the name sent to dnshelper is relative to it.
+   - `present` adds the TXT record (TTL 60, which a provider with a higher minimum raises);
+     `cleanup` deletes that exact name, type and value. Both carry `on_behalf_of`, need a write
+     key, count against the rate limit and log an audit line, as any change does.
+   - They are limited to `_acme-challenge` TXT records whatever the key's `restrict`, and the
+     key's `restrict` applies too.
+   - These clients send HTTP Basic authentication. dnsapi accepts Basic, with the key as the
+     password and any user name, on these two endpoints only; Bearer works there too.
+   - **VERIFY** against the sources of lego (`providers/dns/httpreq`) and acme.sh
+     (`dnsapi/dns_acmeproxy.sh`): the paths, the JSON fields, the trailing dot, the
+     authentication, and what each expects in the response.
+   - certbot has no such plugin: the README shows `--manual-auth-hook` and
+     `--manual-cleanup-hook` scripts that call the REST API with curl.
+
+A typical setup for internal hosts:
+- on dnshelper's Access page, the ACME preset for `module/dnsapi1` on the zones concerned;
+- a tenant, for example "Internal hosts", with those zones;
+- one key per host: write scope, `restrict` preset `acme`, the host's address in its allowlist,
+  optionally an expiry.
+
+The CA validates against the zone's public name servers, so the zones must be public, even when
+the hosts are not. NS8's own Let's Encrypt certificates (Traefik) are unrelated to this.
 
 ## Security
 
@@ -285,11 +357,38 @@ This is not the customer control panel: only cluster administrators can reach it
      parallel), propagation in 5 s. Not tested on a node: `owned_by`, because the zone had no
      record another module wrote (the unit tests cover it).
 3. Write endpoints over `apply-changes`, `append-records`, `set-records`, `delete-records`
-   (dnshelper's phase 1: released in 0.7.0).
-4. Admin UI; OpenAPI document; README with a Blesta/WHMCS-style walk-through.
-5. Node test: two tenants, isolation (a tenant key cannot read or write the other tenant's zone),
-   a zone dnshelper's policy does not grant, rate limits, key revocation.
-6. Phase 2 (delegated zones), then phase 3 (PowerDNS hosting), as needed.
+   (dnshelper's phase 1: released in 0.7.0). **Done** (2026-11-21):
+   - `POST .../changes`, `POST .../records`, `PUT .../rrsets` (mode `rrset`), `DELETE .../records`.
+     A write key is checked before the body is read; the body is checked (records at most 100,
+     only `name`, `type`, `ttl`, `data`) before anything is sent, and dnsapi builds dnshelper's
+     input itself, so a client cannot set `zone` or `on_behalf_of`.
+   - `on_behalf_of` is `<tenant>:<key id>`: the zone's tenant, also for an operator key, or
+     `operator` for a zone without a tenant.
+   - `list-owners` is read before the write, because dnshelper forgets a record's owner when it is
+     removed; the warnings come from what dnshelper reports it removes (`changes.remove`), so they
+     are the same for a dry run and the write. A write counts twice against the rate limit.
+   - Every change, including a refused one, logs one audit line: key, tenant, address, action,
+     zone, records added and removed, outcome.
+   - Tested on the test node (2026-11-21) on `example.com` (ns8-powerdns), with a temporary full
+     rule for `module/dnsapi2`, removed afterwards, and test records only (the zone ended as it
+     began, SOA and NS): add; an edit as a dry run (nothing written) and for real; the same edit
+     again refused with 409 `stale`; an RRset replaced; a CNAME beside an A record refused (409
+     `conflict`); the apex NS refused (403 `forbidden`); a TXT value with spaces kept unquoted; a
+     read key refused; a record written by a module (`dnsapi2` itself, without `on_behalf_of`)
+     shown with `owned_by` and its deletion warned about, as a dry run and for real; an operator
+     key deleting a tenant's records. dnshelper's audit lines carry
+     `on_behalf_of="<tenant>:<key id>"`. A write took about 0.8 s (`list-owners`, then the
+     write), a read 0.42 s.
+   - Finding for dnshelper, not changed here: adding a CNAME where A records exist is refused
+     with the message "dnsapi-test-a has a CNAME, which cannot coexist with A records", which
+     names the wrong side; the code (`conflict`) is right.
+4. ACME DNS-01: key restrictions, zones with partial access, `/v1/acme/present` and `/cleanup`;
+   README walk-throughs for lego, acme.sh and certbot.
+5. Admin UI; OpenAPI document; README with a Blesta/WHMCS-style walk-through.
+6. Node test: two tenants, isolation (a tenant key cannot read or write the other tenant's zone),
+   a zone dnshelper's policy does not grant, rate limits, key revocation; a certificate from Let's
+   Encrypt's staging CA with lego against a zone with only the ACME rule.
+7. Phase 2 (delegated zones), then phase 3 (PowerDNS hosting), as needed.
 
 ## Open questions
 
@@ -302,8 +401,9 @@ This is not the customer control panel: only cluster administrators can reach it
 4. **Zone assignment.** Is one zone per tenant enough, or do sub-zones or shared zones need
    restrictions by name pattern (for example tenant A gets `shop.example.com` in the operator's
    zone)? v1: whole zones only.
-5. **Tenant-level restrictions** (record types, names), like dnshelper's policy rules. v1: none
-   beyond the safety rails.
+5. **Tenant-level restrictions** (record types, names), like dnshelper's policy rules. Decided
+   2026-11-21 for keys, not tenants: a key's `restrict` (see
+   [ACME DNS-01 validation](#acme-dns-01-validation)). Restrictions on a whole tenant: none in v1.
 6. **Customer control panel:** this module's own UI with OIDC, or a separate module? Deferred.
 7. **More than one dnshelper instance.** Use the first one discovery finds, or let the
    administrator choose one in Settings? v1: the first, shown on the Status page.

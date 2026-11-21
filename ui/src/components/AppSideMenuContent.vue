@@ -1,5 +1,6 @@
 <!--
-  Copyright (C) 2023 Nethesis S.r.l.
+  Copyright (C) 2023 Nethesis S.r.l. (ns8-kickstart template)
+  Copyright (C) 2026 Dan Brown
   SPDX-License-Identifier: GPL-3.0-or-later
 -->
 <template>
@@ -20,6 +21,27 @@
       >
         <template v-slot:nav-icon><Activity20 /></template>
         <span>{{ $t("status.title") }}</span>
+      </cv-side-nav-link>
+      <cv-side-nav-link
+        @click="goToAppPage(instanceName, 'tenants')"
+        :class="{ 'current-page': isLinkActive('tenants') }"
+      >
+        <template v-slot:nav-icon><UserMultiple20 /></template>
+        <span>{{ $t("tenants.title") }}</span>
+      </cv-side-nav-link>
+      <cv-side-nav-link
+        @click="goToAppPage(instanceName, 'keys')"
+        :class="{ 'current-page': isLinkActive('keys') }"
+      >
+        <template v-slot:nav-icon><Password20 /></template>
+        <span>{{ $t("keys.title") }}</span>
+      </cv-side-nav-link>
+      <cv-side-nav-link
+        @click="goToAppPage(instanceName, 'activity')"
+        :class="{ 'current-page': isLinkActive('activity') }"
+      >
+        <template v-slot:nav-icon><RecentlyViewed20 /></template>
+        <span>{{ $t("activity.title") }}</span>
       </cv-side-nav-link>
       <cv-side-nav-link
         @click="goToAppPage(instanceName, 'settings')"
@@ -43,6 +65,9 @@
 import Settings20 from "@carbon/icons-vue/es/settings/20";
 import Information20 from "@carbon/icons-vue/es/information/20";
 import Activity20 from "@carbon/icons-vue/es/activity/20";
+import UserMultiple20 from "@carbon/icons-vue/es/user--multiple/20";
+import Password20 from "@carbon/icons-vue/es/password/20";
+import RecentlyViewed20 from "@carbon/icons-vue/es/recently-viewed/20";
 import { mapState } from "vuex";
 import { QueryParamService, UtilService } from "@nethserver/ns8-ui-lib";
 
@@ -52,6 +77,9 @@ export default {
     Settings20,
     Information20,
     Activity20,
+    UserMultiple20,
+    Password20,
+    RecentlyViewed20,
   },
   mixins: [QueryParamService, UtilService],
   data() {

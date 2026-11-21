@@ -1,0 +1,100 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "list-activity output",
+    "$id": "http://schema.nethserver.org/dnsapi/list-activity-output.json",
+    "description": "Changes, newest first. source 'api': made through the API (key, owner, address); source 'admin': made by an administrator through an action (caller); target_key: a key made or revoked",
+    "examples": [
+        {
+            "entries": [
+                {
+                    "time": "2026-11-21T18:00:00Z",
+                    "source": "api",
+                    "key": "a1b2c3d4",
+                    "owner": "t1a2b3c4d",
+                    "tenant": "t1a2b3c4d",
+                    "address": "203.0.113.10",
+                    "action": "apply-changes",
+                    "zone": "example.com",
+                    "add": [
+                        "www A 192.0.2.2"
+                    ],
+                    "remove": [
+                        "www A 192.0.2.1"
+                    ],
+                    "result": "ok"
+                }
+            ]
+        }
+    ],
+    "type": "object",
+    "required": [
+        "entries"
+    ],
+    "properties": {
+        "entries": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": [
+                    "time",
+                    "source",
+                    "action",
+                    "result"
+                ],
+                "properties": {
+                    "time": {
+                        "type": "string"
+                    },
+                    "source": {
+                        "enum": [
+                            "api",
+                            "admin"
+                        ]
+                    },
+                    "action": {
+                        "type": "string"
+                    },
+                    "result": {
+                        "type": "string"
+                    },
+                    "key": {
+                        "type": "string"
+                    },
+                    "owner": {
+                        "type": "string"
+                    },
+                    "caller": {
+                        "type": "string"
+                    },
+                    "tenant": {
+                        "type": [
+                            "string",
+                            "null"
+                        ]
+                    },
+                    "zone": {
+                        "type": "string"
+                    },
+                    "address": {
+                        "type": "string"
+                    },
+                    "add": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    },
+                    "remove": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    },
+                    "target_key": {
+                        "type": "string"
+                    }
+                }
+            }
+        }
+    }
+}

@@ -7,6 +7,7 @@
 
 import http.client
 import json
+import re
 import logging
 import os
 import shutil
@@ -202,6 +203,21 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(body, {"status": "ok"})
         self.assertEqual(resp.getheader("Server"), "dnsapi")
 
+    def test_openapi_document(self):
+        resp, body = self.request("GET", "/v1/openapi.json")
+        self.assertEqual(resp.status, 200)
+        self.assertEqual(body["openapi"], "3.1.0")
+        # every route of the service is described, with the same methods
+        from dnsapi_server.api import ROUTES
+        described = {}
+        for path, item in body["paths"].items():
+            pattern = re.sub(r"\{[a-z_]+\}", "[^/]+", path)
+            described[pattern] = {m.upper() for m in item if m in ("get", "post", "put", "patch", "delete")}
+        for route, methods in ROUTES:
+            pattern = re.sub(r"\(\?P<[a-z]+>\[\^/\]\+\)", "[^/]+", route)
+            self.assertIn(pattern, described, route)
+            self.assertEqual(described[pattern], set(methods), route)
+
     def test_status_head_and_method(self):
         resp, body = self.request("HEAD", "/v1/status")
         self.assertEqual(resp.status, 200)
@@ -388,6 +404,27 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(data["dry_run"], False)
         actions = [c[1] for c in self.backend.calls]
         self.assertLess(actions.index("list-owners"), actions.index("append-records"))
+
+    def test_changes_go_to_the_activity_file(self):
+        record = {"name": "shop", "type": "A", "data": "192.0.2.9"}
+        self.request("POST", "/v1/zones/acme.test/records", "acme", body={"records": [record]})
+        self.request("POST", "/v1/tenants", "operator", body={"name": "Gamma"})
+        with open(os.path.join(self.usage, "activity.jsonl")) as fp:
+            entries = [json.loads(line) for line in fp]
+        self.assertEqual([e["action"] for e in entries], ["append-records", "add-tenant"])
+        self.assertEqual(entries[0]["add"], ["shop A 192.0.2.9"])
+        self.assertEqual(entries[0]["tenant"], "t00000001")
+        self.assertEqual(entries[0]["result"], "ok")
+        self.assertNotIn(self.keys["acme"], json.dumps(entries))
+
+    def test_activity_names_the_acting_key(self):
+        resp, body = self.request("POST", "/v1/tenants/t00000002/keys", "operator", body={"scope": "read"})
+        with open(os.path.join(self.usage, "activity.jsonl")) as fp:
+            entry = [json.loads(line) for line in fp][-1]
+        self.assertEqual(entry["action"], "create-key")
+        self.assertEqual(entry["key"], self.key_id("operator"))
+        self.assertEqual(entry["target_key"], body["id"])
+        self.assertNotIn(body["key"], json.dumps(entry))
 
     def test_write_other_tenants_zone_is_404(self):
         resp, body = self.request("POST", "/v1/zones/beta.test/records", "acme",

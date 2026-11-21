@@ -7,8 +7,9 @@ certificates, and what to do when something goes wrong. Developers who write a c
 API, or who want to know how dnsapi is built, should read the [main README](../README.md)
 instead.
 
-The admin UI does not yet have pages for tenants and keys: until it does, this guide uses the
-command line on the node (`api-cli`, `runagent`).
+Everything here can be done from the module's pages in the cluster admin UI (Status, Tenants,
+Keys, Activity, Settings). The command-line equivalent (`api-cli`, `runagent` on the node) follows
+each step, for scripts.
 
 - [What dnsapi does](#what-dnsapi-does)
 - [Before you start](#before-you-start)
@@ -48,7 +49,8 @@ customer (tenant) owns which zone, and what each key may do.
 
 ## Publishing the API
 
-Set the host name, and optionally the certificate and the addresses allowed to connect:
+On the **Settings** page, set the host name, and optionally the certificate, the addresses
+allowed to connect and the rate limit. From the command line:
 
     api-cli run module/dnsapi1/configure-module --data '{"host": "dnsapi.example.com", "lets_encrypt": true}'
 
@@ -62,9 +64,8 @@ Set the host name, and optionally the certificate and the addresses allowed to c
 - `rate_limit`: DNS requests per minute for each key, default 60. Reads count too, because they
   count against your DNS host's own limits (GoDaddy, for example, allows about 60 per minute).
 
-A field you leave out keeps its value. The Settings page in the admin UI sets all of them except
-`rate_limit`.
-Check that the API answers:
+On the command line, a field you leave out keeps its value. The **Status** page then shows the
+API's address. Check that it answers:
 
     curl https://dnsapi.example.com/v1/status
 
@@ -81,25 +82,30 @@ add a rule for `module/dnsapi1` on the zones it may hand out, with one of two pr
   used only to validate certificates (see [below](#certificates-for-other-systems-acme-dns-01)).
 
 dnshelper still refuses what no rule covers, and never changes the zone's SOA or its apex NS
-records. To see what dnsapi may hand out:
+records. The **Status** page counts the zones dnsapi may use, and says so when there are none; on
+the **Tenants** page, a zone marked "Some records" is one where dnsapi may change only what the
+rule allows. From the command line:
 
     api-cli run module/dnsapi1/list-assignable-zones
-
-`"full": true` means every record; `false` means only what the rule allows.
 
 ## Tenants and their zones
 
 A tenant is one of your customers. Each zone belongs to at most one tenant, and a tenant's keys
 reach only its own zones.
 
+On the **Tenants** page, **Add tenant** asks for a name and the zones to give it: the zones dnsapi
+may use that no other tenant has. **Edit** renames a tenant, gives or takes zones, and disables
+it: a disabled tenant's keys are refused until you enable it again. **Remove** removes a tenant
+with its keys. Taking a zone or removing a tenant never changes any record. Your portal can do
+all of this through the API with an operator key.
+
+From the command line:
+
     api-cli run module/dnsapi1/add-tenant --data '{"name": "Acme Ltd"}'
     api-cli run module/dnsapi1/assign-zone --data '{"tenant": "t1a2b3c4d", "zone": "acme.example"}'
     api-cli run module/dnsapi1/list-tenants
 
-`update-tenant` renames a tenant or disables it (`{"id": "t1a2b3c4d", "enabled": false}`): its keys
-are refused until you enable it again. `unassign-zone` takes a zone back and `remove-tenant`
-removes a tenant with its keys; neither changes any record. Your portal can do all of this
-through the API with an operator key.
+and `update-tenant` (`{"id": "t1a2b3c4d", "enabled": false}`), `unassign-zone`, `remove-tenant`.
 
 If you remove dnshelper's rule for a zone, dnsapi drops it from its tenant the next time
 dnshelper's zones change.
@@ -110,40 +116,55 @@ A key looks like `dnsapi_1a2b3c4d_...` and is shown only once, when it is made: 
 a fingerprint of it, so a lost key cannot be recovered, only replaced. There are two kinds:
 
 - an **operator key** reaches every zone dnsapi may hand out and manages tenants and their keys.
-  This is the key for your billing portal. Only you can make one, from the node:
-
-      runagent -m dnsapi1 create-key --owner operator --scope write --label "billing portal"
-
+  This is the key for your billing portal. Only you can make one.
 - a **tenant key** reaches only that tenant's zones, for a customer who scripts their own DNS.
-  Make it the same way with `--owner t1a2b3c4d`, or let your portal make it through the API.
+  You or your portal can make one.
 
-Options for every key:
+On the **Keys** page, **Create key** asks for:
 
-- `--scope read` for a key that may only read;
-- `--allowlist 203.0.113.10,198.51.100.0/24`: the addresses it may be used from;
-- `--expires 2027-12-31T00:00:00Z`: when it stops working;
-- `--restrict acme`: only `_acme-challenge` TXT records; or `--restrict 'www,mail' --types A,AAAA`
-  for other names and types (names relative to the zone, `*` and `?` allowed). A restricted
-  key cannot manage tenants and keys. A restriction cannot be changed later: make a new key.
+- the owner: the operator, or a tenant;
+- the access: read and change, or read only;
+- a label, to remember what the key is for;
+- the records: every record, ACME challenges only (`_acme-challenge` TXT records), or some names
+  and types (names relative to the zone, `*` and `?` allowed). A limited key cannot manage
+  tenants and keys, and the limit cannot be changed later: make a new key;
+- the addresses it may be used from, one per line;
+- optionally, a day after which it stops working.
 
-List the keys, with when each was last used, and revoke one:
+The key is made in your browser and shown once, with a copy button: copy it into the portal or
+the system that uses it before closing the dialog. The page lists the keys, with when each was
+last used; **Revoke** stops a key at once. If a key may have leaked, revoke it and make another.
+**Show keys** on the Tenants page lists one tenant's keys.
 
+From the command line, `create-key` prints the key:
+
+    runagent -m dnsapi1 create-key --owner operator --scope write --label "billing portal" \
+        [--allowlist 203.0.113.10,198.51.100.0/24] [--expires 2027-12-31T00:00:00Z] \
+        [--restrict acme | --restrict 'www,mail' --types A,AAAA]
     api-cli run module/dnsapi1/list-keys
     api-cli run module/dnsapi1/revoke-key --data '{"id": "1a2b3c4d"}'
 
-A revoked key stops working at once. If a key may have leaked, revoke it and make another.
-
 ## Connecting a billing or client portal
 
-1. Publish the API ([above](#publishing-the-api)), ideally with `ip_allowlist` set to the portal
-   server's address.
-2. Let dnsapi use the zones ([above](#letting-dnsapi-use-zones)) with the "API module (all
-   records)" preset.
-3. Make an operator key with write scope and give it to the portal, with the API's address.
+For example a Blesta or WHMCS module that lets your customers manage the DNS of the domains they
+host with you:
 
-The portal then adds a tenant for each customer, assigns the customer's zones, and reads and
-changes records for whichever customer is logged in. Its developers will find the API in the
-[README](../README.md#api).
+1. **Publish the API** ([above](#publishing-the-api)), with the portal server's address in
+   Settings' allowed addresses: nobody else then reaches the API at all.
+2. **Let dnsapi use the customers' zones** ([above](#letting-dnsapi-use-zones)) with the "API
+   module (all records)" preset. A zone you add to dnshelper later needs the rule too.
+3. **Make an operator key** on the Keys page: owner Operator, read and change, label "Billing
+   portal", the portal server's address as allowed address. Paste it, and the API address shown
+   on the Status page, into the portal's settings.
+4. **Let the portal set up its customers.** With the operator key it adds a tenant for each
+   customer and assigns the customer's zones (or you do it on the Tenants page), then reads and
+   changes records for whichever customer is logged in. The customers never see a key.
+5. **Check the Activity page** after the first changes: each one is listed with the key, the
+   customer and the records.
+
+When a customer leaves, remove the tenant (or have the portal do it): their zones stay as they
+are, but nothing reaches them through the API any more. The portal's developers will find what
+they need in the [README](../README.md#writing-a-portal-integration).
 
 Some records in a customer's zone may have been written by another NS8 module, such as the mail
 server's MX or DKIM record. A customer may change them, but the API warns that the module may
@@ -162,12 +183,14 @@ Set it up once:
 1. On dnshelper's Access page, a rule for `module/dnsapi1` with the **ACME DNS-01** preset on the
    zones the certificates are for (or "API module (all records)" if the zone is also a
    customer's).
-2. A tenant for those systems, with the zones:
+2. On the Tenants page, a tenant for those systems, such as "Internal hosts", with the zones.
+   From the command line:
 
        api-cli run module/dnsapi1/add-tenant --data '{"name": "Internal hosts"}'
        api-cli run module/dnsapi1/assign-zone --data '{"tenant": "t1a2b3c4d", "zone": "example.com"}'
 
-3. One key per system, limited to ACME records and to the system's address:
+3. On the Keys page, one key per system: owner that tenant, read and change, records "ACME
+   challenges only", and the system's address as allowed address. From the command line:
 
        runagent -m dnsapi1 create-key --owner t1a2b3c4d --scope write --restrict acme \
            --allowlist 10.0.0.5 --label "host1 certificates"
@@ -209,17 +232,21 @@ the others and removed on its own.
 
 ## Seeing what happened
 
-Every change, and every refused change, writes one line to the module's log in the cluster's
-Logs page (or `journalctl` on the node), starting with `dnsapi audit:`: which key, which tenant,
-from which address, which zone, the records added and removed, and the result. Keys never appear
-in it. dnshelper logs the same change with the tenant and key (`on_behalf_of`), and its Records
-page shows it in the zone's history.
+The **Activity** page lists the most recent changes: records changed through the API (with the
+key, its owner and the client's address, the records added and removed, and whether the change
+was made, refused or only a dry run), and tenants, zones and keys changed through the API or by
+an administrator. Reads are not listed.
+
+Every change, and every refused change, also writes one line to the module's log in the
+cluster's Logs page (or `journalctl` on the node), starting with `dnsapi audit:`. Keys never
+appear in either. dnshelper logs the same change with the tenant and key (`on_behalf_of`), and
+its Records page shows it in the zone's history.
 
 ## Backup and restore
 
 The settings, the tenants and their zones, and the keys are backed up with the module. Restored
-keys keep working, and the restore publishes the API's route again. Only the "last used" times
-are not kept.
+keys keep working, and the restore publishes the API's route again. The "last used" times and the
+Activity page start empty.
 
 ## When something goes wrong
 
@@ -227,8 +254,7 @@ are not kept.
 it; dnsapi notices within moments.
 
 **A zone gives `404 zone_not_found`**: the zone is not assigned to the key's tenant, dnshelper has
-no write rule for dnsapi on it, or the zone is not in dnshelper. Check with
-`list-assignable-zones` and `list-tenants`. A tenant key gets 404 for any zone that is not its
+no write rule for dnsapi on it, or the zone is not in dnshelper. Check the Tenants page. A tenant key gets 404 for any zone that is not its
 own, so that a key does not reveal which zones you manage.
 
 **`403 not_permitted`**: dnshelper's rule for dnsapi does not cover that record, for example an A

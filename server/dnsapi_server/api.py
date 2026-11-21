@@ -480,6 +480,11 @@ class Api:
         log.info('dnsapi audit: key="%s" tenant="%s" address="%s" action="%s" zone="%s" add=%s remove=%s '
                  'result="%s"', req.principal.key_id, tenant or "", req.client_ip, action, zone,
                  show(added), show(removed), outcome)
+        self.store.append_activity({
+            "source": "api", "key": req.principal.key_id, "owner": req.principal.owner,
+            "tenant": tenant, "address": req.client_ip, "action": action, "zone": zone,
+            "add": json.loads(show(added)), "remove": json.loads(show(removed)), "result": outcome,
+        })
 
     def apply_changes(self, req):
         self.require_write(req)
@@ -687,6 +692,12 @@ class Api:
         details = " ".join(f'{k}="{v}"' for k, v in fields.items())
         log.info('dnsapi audit: key="%s" owner="%s" address="%s" action="%s" %s result="ok"',
                  req.principal.key_id, req.principal.owner, req.client_ip, action, details)
+        # "key" is who acted; a key the operator made or revoked is "target_key"
+        extra = {("target_key" if k == "key" else k): v for k, v in fields.items()}
+        self.store.append_activity({
+            "source": "api", "key": req.principal.key_id, "owner": req.principal.owner,
+            "address": req.client_ip, "action": action, "result": "ok", **extra,
+        })
 
 
 ZONE = r"(?P<zone>[^/]+)"

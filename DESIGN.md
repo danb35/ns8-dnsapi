@@ -10,9 +10,9 @@ The dnshelper side is in
 "Delegated access for an API module". Items marked **VERIFY** were not confirmed from the sources
 or on a node.
 
-Status: build order steps 1 to 4 are done (the service and its route; tenants, keys,
-authentication, rate limits and the read endpoints; the write endpoints; ACME DNS-01); the admin
-UI is design. dnshelper's side, phase 1, is released in dnshelper 0.7.0 (2026-11-21), which this
+Status: build order steps 1 to 5 are done (the service and its route; tenants, keys,
+authentication, rate limits and the read endpoints; the write endpoints; ACME DNS-01; the admin
+UI and the OpenAPI document); the full node test (step 6) is next. dnshelper's side, phase 1, is released in dnshelper 0.7.0 (2026-11-21), which this
 module needs at least.
 
 Origin: forum request, community.nethserver.org topic 28774, posts 32-37 (2026-11-18/20). The
@@ -315,6 +315,29 @@ the hosts are not. NS8's own Let's Encrypt certificates (Traefik) are unrelated 
 
 This is not the customer control panel: only cluster administrators can reach it.
 
+Built (2026-11-21), in the style of ns8-dnshelper's and ns8-automx's UIs (`ui/src/mixins/dnsapi.js`
+wraps the task events in one promise, as theirs do):
+- **Status**: `get-overview` (one task): the API's address, the dnshelper instance or why it is
+  unusable, the zones dnsapi may use (in full, and assigned), tenants and keys, above the
+  template's module status.
+- **Tenants**: add and edit in one dialog (name, enabled, zones as check boxes: the zones dnsapi
+  may write in that no other tenant has, "Some records" for a partial one); saving calls
+  `add-tenant` or `update-tenant`, then `assign-zone` and `unassign-zone` for what changed.
+  Remove asks for the name to be typed, as dnshelper's dialogs do.
+- **Keys**: a filter by owner (the Tenants page's "Show keys" opens it filtered), and a create
+  dialog with owner, access, label, records (every record, ACME only, or names and types),
+  allowed addresses and an expiry day. Decision (2026-11-21): the key is made in the browser
+  (`crypto.getRandomValues`, SHA-256 with `crypto.subtle`, the same format as `keys.py`; the
+  base32 was checked against Python's), so only its hash reaches `create-key`. It is shown once
+  with a copy button and forgotten when the dialog closes.
+- **Activity**: `list-activity`. Decision (2026-11-21): the journal is not readable by the module's
+  user (checked on the test node: `journalctl --user` and `_UID=` both refuse it), so the changes
+  are also written to `state/usage/activity.jsonl` by the service and
+  `state/usage/admin-activity.jsonl` by the actions (only for callers other than the module
+  itself, so an API change is not listed twice), each trimmed to recent entries and not backed up.
+  An entry names the acting key; a key the operator made or revoked is `target_key`.
+- **Settings**: the template's fields plus `rate_limit`.
+
 ## Build order
 
 1. Scaffold from ns8-kickstart; route via Traefik; `GET /v1/status`. **Done** (2026-11-21):
@@ -415,7 +438,14 @@ This is not the customer control panel: only cluster administrators can reach it
      both (in the user guide's troubleshooting). acme.sh was not run; its format is covered by
      unit tests.
 5. Admin UI; OpenAPI document; a Blesta/WHMCS-style walk-through (user guide for the
-   administrator, README for the portal's developer).
+   administrator, README for the portal's developer). **Done** (2026-11-21):
+   - The admin UI as described under [Admin UI](#admin-ui-ns8-cluster-administrators).
+   - `/v1/openapi.json` (OpenAPI 3.1), served without a key, written by `server/make_openapi.py`;
+     a unit test checks that it describes every route with its methods.
+   - The user guide's "Connecting a billing or client portal" for the administrator, and the
+     README's "Writing a portal integration" for the portal's developer.
+   - CI takes screenshots of every page (and of the create-key dialog) when a commit changes
+     `ui/`, after a tenant and keys exist; `test-module.yml` follows ns8-automx's.
 6. Node test: two tenants, isolation (a tenant key cannot read or write the other tenant's zone),
    a zone dnshelper's policy does not grant, rate limits, key revocation; a certificate from Let's
    Encrypt's staging CA with lego against a zone with only the ACME rule.

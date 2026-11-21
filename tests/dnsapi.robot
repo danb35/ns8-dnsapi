@@ -34,22 +34,6 @@ Check if dnsapi is installed correctly
     &{output} =    Evaluate    ${output}
     Set Global Variable    ${module_id}    ${output.module_id}
 
-Take screenshots
-    [Tags]    ui
-    Import Library    Browser
-    New Browser    chromium    headless=True
-    New Context    ignoreHTTPSErrors=True
-    Login to cluster-admin
-    Go To    https://${NODE_ADDR}/cluster-admin/#/apps/${module_id}
-    Wait For Elements State    iframe >>> h2 >> text="Status"    visible    timeout=10s
-    Sleep    5s
-    Take Screenshot    filename=${OUTPUT DIR}/browser/screenshot/1._Status.png
-    Go To    https://${NODE_ADDR}/cluster-admin/#/apps/${module_id}?page=settings
-    Wait For Elements State    iframe >>> h2 >> text="Settings"    visible    timeout=10s
-    Sleep    5s
-    Take Screenshot    filename=${OUTPUT DIR}/browser/screenshot/2._Settings.png
-    Close Browser
-
 Check if dnsapi can be configured
     ${rc} =    Execute Command    api-cli run module/${module_id}/configure-module --data '{"host": "${API_HOST}", "lets_encrypt": false, "http2https": true}'
     ...    return_rc=True  return_stdout=False
@@ -118,6 +102,46 @@ Check that the operator makes a tenant key through the API
     Should Not Contain    ${output}    hash
     Should Not Contain    ${output}    ${TENANT_KEY}
     Should Contain    ${output}    ${TENANT_KEY_ID}
+
+Check that the Status and Activity actions report the changes
+    ${output} =    Execute Command    api-cli run module/${module_id}/get-overview
+    ${overview} =    Evaluate    json.loads($output)    modules=json
+    Should Be Equal As Integers    ${overview}[tenants]    1
+    Should Be Equal As Integers    ${overview}[keys_operator]    1
+    Should Be Equal As Integers    ${overview}[keys_tenant]    1
+    Should Be Equal    ${overview}[dnshelper_error]    dnshelper_missing
+    Should Be Equal    ${overview}[url]    https://${API_HOST}/v1/
+    ${output} =    Execute Command    api-cli run module/${module_id}/list-activity
+    ${activity} =    Evaluate    [e['action'] for e in json.loads($output)['entries']]    modules=json
+    Should Contain    ${activity}    add-tenant
+    Should Contain    ${activity}    create-key
+    Should Not Contain    ${output}    ${TENANT_KEY}
+
+Take screenshots of the pages
+    # After a tenant and two keys exist, so the pages show rows.
+    [Tags]    ui
+    Import Library    Browser
+    New Browser    chromium    headless=True
+    New Context    ignoreHTTPSErrors=True    viewport={'width': 1440, 'height': 1000}
+    Login to cluster-admin
+    FOR    ${index}    ${page}    ${title}    IN
+    ...    1    status    Status
+    ...    2    tenants    Tenants
+    ...    3    keys    Keys
+    ...    4    activity    Activity
+    ...    5    settings    Settings
+        Go To    https://${NODE_ADDR}/cluster-admin/#/apps/${module_id}?page=${page}
+        Wait For Elements State    iframe >>> h2 >> text="${title}"    visible    timeout=20s
+        Sleep    5s
+        Take Screenshot    filename=${OUTPUT DIR}/browser/screenshot/${index}._${title}.png
+    END
+    Go To    https://${NODE_ADDR}/cluster-admin/#/apps/${module_id}?page=keys
+    Wait For Elements State    iframe >>> h2 >> text="Keys"    visible    timeout=20s
+    Click    iframe >>> button >> text="Create key"
+    Wait For Elements State    iframe >>> text="Create a key"    visible    timeout=10s
+    Sleep    2s
+    Take Screenshot    filename=${OUTPUT DIR}/browser/screenshot/6._Create_key.png
+    Close Browser
 
 Check that a tenant key cannot reach the operator endpoints
     ${status}    ${body} =    Call API    GET    /v1/tenants    ${TENANT_KEY}

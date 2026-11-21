@@ -26,6 +26,8 @@ import threading
 log = logging.getLogger("dnsapi")
 
 DEFAULT_SETTINGS = {"rate_limit": 60}
+ACTIVITY_MAX_BYTES = 1024 * 1024
+ACTIVITY_KEEP = 2000
 FILES = {
     "settings": ("settings.json", {}),
     "tenants": ("tenants.json", {"tenants": {}}),
@@ -127,6 +129,29 @@ class Store:
                 if sep and name in ("REDIS_USER", "REDIS_PASSWORD"):
                     values[name] = value
         return values["REDIS_USER"], values["REDIS_PASSWORD"]
+
+    # activity (DESIGN.md, Admin UI): the journal is not readable by the module's
+    # user, so the changes are also kept in usage/activity.jsonl for the Activity
+    # page, trimmed to the most recent entries. The service is its only writer.
+
+    def append_activity(self, entry):
+        if not self.usage_dir:
+            return
+        path = os.path.join(self.usage_dir, "activity.jsonl")
+        line = json.dumps({"time": isoformat(self.clock()), **entry}, separators=(",", ":")) + "\n"
+        with self.lock:
+            try:
+                with open(path, "a") as fp:
+                    fp.write(line)
+                if os.path.getsize(path) > ACTIVITY_MAX_BYTES:
+                    with open(path) as fp:
+                        keep = fp.readlines()[-ACTIVITY_KEEP:]
+                    fd, tmp = tempfile.mkstemp(dir=self.usage_dir, prefix=".activity.")
+                    with os.fdopen(fd, "w") as fp:
+                        fp.writelines(keep)
+                    os.replace(tmp, path)
+            except OSError as exc:
+                log.error("cannot write activity.jsonl: %s", exc)
 
     # last-used times
 

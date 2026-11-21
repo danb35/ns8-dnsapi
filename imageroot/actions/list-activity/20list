@@ -1,0 +1,20 @@
+#!/usr/bin/env python3
+
+#
+# Copyright (C) 2026 Dan Brown
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+
+# The most recent changes, for the admin UI's Activity page: what the API
+# changed (records, tenants, zones, keys, written by the service) and what
+# administrators changed through the actions. Reads are not listed.
+
+import json
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.environ["AGENT_INSTALL_DIR"], "pypkg"))
+from dnsapi import state
+
+request = json.load(sys.stdin) or {}
+json.dump({"entries": state.activity(request.get("limit", 200))}, fp=sys.stdout)

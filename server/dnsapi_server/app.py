@@ -10,6 +10,7 @@
 
 import json
 import logging
+import os
 import signal
 import sys
 import threading
@@ -25,6 +26,7 @@ from .store import Store
 log = logging.getLogger("dnsapi")
 
 MAX_BODY = 1024 * 1024  # DESIGN.md, Security, Limits
+OPENAPI_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "openapi.json")
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -67,6 +69,14 @@ class Handler(BaseHTTPRequestHandler):
                 if method not in ("GET", "HEAD"):
                     raise self._not_allowed(method, {"GET"})
                 self._send_json(HTTPStatus.OK, {"status": "ok"}, head=head)
+                return
+            if path == "/v1/openapi.json":
+                # The API's description needs no key.
+                self._discard_body()
+                if method not in ("GET", "HEAD"):
+                    raise self._not_allowed(method, {"GET"})
+                with open(OPENAPI_PATH) as fp:
+                    self._send_json(HTTPStatus.OK, json.load(fp), head=head)
                 return
             body = self._read_body()
             api = self.api

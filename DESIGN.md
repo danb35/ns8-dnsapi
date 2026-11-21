@@ -10,9 +10,9 @@ The dnshelper side is in
 "Delegated access for an API module". Items marked **VERIFY** were not confirmed from the sources
 or on a node.
 
-Status: build order steps 1 to 5 are done (the service and its route; tenants, keys,
+Status: build order steps 1 to 7 are done (the service and its route; tenants, keys,
 authentication, rate limits and the read endpoints; the write endpoints; ACME DNS-01; the admin
-UI and the OpenAPI document); the full node test (step 6) is next. dnshelper's side, phase 1, is released in dnshelper 0.7.0 (2026-11-21), which this
+UI and the OpenAPI document; the full node test; the API host name in DNS). dnshelper's side, phase 1, is released in dnshelper 0.7.0 (2026-11-21), which this
 module needs at least.
 
 Origin: forum request, community.nethserver.org topic 28774, posts 32-37 (2026-11-18/20). The
@@ -554,7 +554,27 @@ wraps the task events in one promise, as theirs do):
      rule (only a record dnsapi wrote without `on_behalf_of`).
 7. The API host name in DNS: the CNAME to the node before `set-route`, the reserved name, the
    Status and Settings pages; a node test with a real Let's Encrypt certificate for the API's
-   host name.
+   host name. **Built** (2026-11-21):
+   - `pypkg/dnsapi/hostrecord.py`, called by `configure-module` before `set-route`; checked
+     against a fake dnshelper for every outcome (added, already there, another CNAME, an A
+     record, a record dnsapi cannot read, not managed, no rule, apex, dnshelper not answering,
+     the wait succeeding after two checks and giving up after 90 s).
+   - `update-module` on an existing instance granted the new `node:reader` (`node/3: reader`).
+   - Tested on the test node, DNS only (decision 2026-11-21: `ns8.2v6.in`, the node's host
+     name, has no public record, so Let's Encrypt could not validate a CNAME to it), in `2v6.in`
+     (Cloudflare) with temporary rules, everything removed afterwards: no rule, `not_permitted`;
+     with a rule (write, CNAME), `created`, the CNAME to `ns8.2v6.in.` in the zone, listed in
+     dnshelper's owner index as dnsapi's; run again, `ok`; a TXT record dnsapi may not read at
+     the name, `conflict` (dnshelper refused the CNAME) and the TXT untouched; a zone dnshelper
+     does not manage, `not_managed`; publishing off, `disabled`; `configure-module` succeeded in
+     every case. Reserved name, all 403 `reserved_name`: a tenant key holding the zone repointing
+     the CNAME, the operator key deleting it, ACME for `_acme-challenge.<host>`; reading it 200
+     (with `owned_by`), another `_acme-challenge` name allowed.
+   - In the browser: Settings with the switch and the notice; Status with the notice when the
+     record needs attention. Found there and fixed: Settings lacked the shared mixin and did not
+     render; the not-permitted notice now names the rule's name relative to the zone.
+   - Not tested: the wait for the name servers before a real certificate, and the certificate
+     itself, which need the node's host name to resolve publicly and port 80 to reach the node.
 8. Phase 2 (delegated zones), then phase 3 (PowerDNS hosting), as needed.
 
 ## Open questions

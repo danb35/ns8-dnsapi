@@ -15,7 +15,8 @@
             "tenants": 2,
             "tenants_disabled": 0,
             "keys_operator": 1,
-            "keys_tenant": 3
+            "keys_tenant": 3,
+            "host_record": null
         }
     ],
     "type": "object",
@@ -30,7 +31,8 @@
         "tenants",
         "tenants_disabled",
         "keys_operator",
-        "keys_tenant"
+        "keys_tenant",
+        "host_record"
     ],
     "properties": {
         "host": {
@@ -84,6 +86,55 @@
         "keys_tenant": {
             "type": "integer",
             "minimum": 0
+        },
+        "host_record": {
+            "type": [
+                "object",
+                "null"
+            ],
+            "description": "The host name's CNAME to the node, as configure-module last found it; null before it has run",
+            "properties": {
+                "host": {
+                    "type": "string"
+                },
+                "target": {
+                    "type": "string"
+                },
+                "zone": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "status": {
+                    "enum": [
+                        "ok",
+                        "created",
+                        "conflict",
+                        "not_managed",
+                        "not_permitted",
+                        "apex",
+                        "disabled",
+                        "error"
+                    ]
+                },
+                "existing": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    },
+                    "description": "The records found at the name, as 'TYPE data'"
+                },
+                "propagated": {
+                    "type": "boolean"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "checked": {
+                    "type": "string"
+                }
+            }
         }
     }
 }

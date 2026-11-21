@@ -34,6 +34,7 @@ result = {
     "tenants_disabled": sum(1 for t in tenants.values() if not t.get("enabled", True)),
     "keys_operator": sum(1 for k in keys.values() if k["owner"] == "operator"),
     "keys_tenant": sum(1 for k in keys.values() if k["owner"] != "operator"),
+    "host_record": state.load("host-record.json", None),
 }
 if target:
     try:

@@ -11,7 +11,19 @@
             "ip_allowlist": [
                 "203.0.113.10"
             ],
-            "rate_limit": 60
+            "rate_limit": 60,
+            "publish_host_record": true,
+            "host_record": {
+                "host": "dnsapi.example.com",
+                "target": "node1.example.com",
+                "zone": "example.com",
+                "status": "ok",
+                "existing": [
+                    "CNAME node1.example.com."
+                ],
+                "message": "",
+                "checked": "2026-11-21T18:00:00Z"
+            }
         }
     ],
     "type": "object",
@@ -21,7 +33,9 @@
         "lets_encrypt",
         "http2https",
         "ip_allowlist",
-        "rate_limit"
+        "rate_limit",
+        "publish_host_record",
+        "host_record"
     ],
     "properties": {
         "host": {
@@ -45,6 +59,58 @@
         },
         "rate_limit": {
             "type": "integer"
+        },
+        "publish_host_record": {
+            "type": "boolean"
+        },
+        "host_record": {
+            "type": [
+                "object",
+                "null"
+            ],
+            "description": "The host name's CNAME to the node, as configure-module last found it; null before it has run",
+            "properties": {
+                "host": {
+                    "type": "string"
+                },
+                "target": {
+                    "type": "string"
+                },
+                "zone": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "status": {
+                    "enum": [
+                        "ok",
+                        "created",
+                        "conflict",
+                        "not_managed",
+                        "not_permitted",
+                        "apex",
+                        "disabled",
+                        "error"
+                    ]
+                },
+                "existing": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    },
+                    "description": "The records found at the name, as 'TYPE data'"
+                },
+                "propagated": {
+                    "type": "boolean"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "checked": {
+                    "type": "string"
+                }
+            }
         }
     }
 }

@@ -33,6 +33,7 @@ SETTINGS_DEFAULTS = {
     "http2https": True,
     "ip_allowlist": [],
     "rate_limit": 60,
+    "publish_host_record": True,
 }
 
 

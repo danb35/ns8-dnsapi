@@ -47,6 +47,14 @@ Check that get-configuration returns the settings
     Should Be Equal    ${config}[host]    ${API_HOST}
     Should Be True    ${config}[http2https]
 
+Check that the host record step reports dnshelper missing
+    # No dnshelper on CI nodes: configure-module still succeeds and says why it did not publish.
+    ${output} =    Execute Command    api-cli run module/${module_id}/get-configuration
+    ${config} =    Evaluate    json.loads($output)    modules=json
+    Should Be True    ${config}[publish_host_record]
+    Should Be Equal    ${config}[host_record][status]    error
+    Should Be Equal    ${config}[host_record][host]    ${API_HOST}
+
 Check that a bad allowlist address is refused
     ${rc} =    Execute Command    api-cli run module/${module_id}/configure-module --data '{"ip_allowlist": ["not-an-address"]}'
     ...    return_rc=True  return_stdout=False

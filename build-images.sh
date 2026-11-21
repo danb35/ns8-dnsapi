@@ -57,7 +57,7 @@ buildah rm "${testcontainer}" >/dev/null
 
 # Setup the entrypoint, ask to reserve one TCP port with the label and set a rootless container
 buildah config --entrypoint=/ \
-    --label="org.nethserver.authorizations=dnshelper@any:dnswriter traefik@node:routeadm" \
+    --label="org.nethserver.authorizations=dnshelper@any:dnswriter traefik@node:routeadm node:reader" \
     --label="org.nethserver.tcp-ports-demand=1" \
     --label="org.nethserver.rootfull=0" \
     --label="org.nethserver.min-core=3.23.0" \

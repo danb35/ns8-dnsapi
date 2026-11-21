@@ -71,6 +71,26 @@ API's address. Check that it answers:
 
 which answers `{"status": "ok"}`.
 
+**The host name's DNS record.** When the host name is in a zone dnshelper manages, dnsapi adds
+the record itself, before requesting the certificate: a CNAME from the host name to this node's
+own host name. It needs a rule on dnshelper's Access page for `module/dnsapi1`: write, names the
+host name relative to the zone (`dnsapi` for `dnsapi.example.com`), type `CNAME`. The "API module
+(all records)" preset on the zone covers it too. Settings shows what dnsapi found:
+
+- the CNAME is there, or was just added (dnsapi then waits up to a minute and a half for the
+  zone's name servers to answer with it, so that Let's Encrypt can see it);
+- another record is at the name: dnsapi never changes it; point it to this node on dnshelper's
+  Records page, or turn off "Publish the host name in DNS";
+- the zone is not in dnshelper, there is no rule, or the host name is a zone's apex (which
+  cannot have a CNAME): add the record yourself at your DNS host.
+
+None of these stops the settings from being saved. If you change the host name, the old name's
+record stays; remove it on dnshelper's Records page, where it is listed as dnsapi's.
+
+No API key can change the records of the API's own host name, or of `_acme-challenge` at that
+name, even when its zone belongs to a tenant: a customer could otherwise point the API elsewhere
+and collect the keys sent to it (`403 reserved_name`).
+
 ## Letting dnsapi use zones
 
 dnshelper refuses everything to dnsapi until you add a rule for it. On dnshelper's Access page,
@@ -263,6 +283,9 @@ it; dnsapi notices within moments.
 **A zone gives `404 zone_not_found`**: the zone is not assigned to the key's tenant, dnshelper has
 no write rule for dnsapi on it, or the zone is not in dnshelper. Check the Tenants page. A tenant key gets 404 for any zone that is not its
 own, so that a key does not reveal which zones you manage.
+
+**`403 reserved_name`**: the record is the API's own host name, or its `_acme-challenge`; change
+it on dnshelper's Records page.
 
 **`403 not_permitted`**: dnshelper's rule for dnsapi does not cover that record, for example an A
 record in a zone with only the ACME preset.

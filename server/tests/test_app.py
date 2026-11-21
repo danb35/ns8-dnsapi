@@ -503,6 +503,60 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(data["zone"], "acme.test")
         self.assertTrue(data["on_behalf_of"].startswith("t00000001:"))
 
+    # the API's own host name (DESIGN.md, The API host name in DNS)
+
+    def reserve(self, host):
+        write_json(self.dir, "settings.json", {"host": host, "rate_limit": 60})
+        os.utime(os.path.join(self.dir, "settings.json"), (3, 3))
+
+    def test_api_host_name_is_reserved(self):
+        self.reserve("api.acme.test")
+        rec = {"name": "api", "type": "A", "data": "198.51.100.66"}
+        cases = [
+            ("POST", "/v1/zones/acme.test/records", "acme", {"records": [rec]}),
+            ("POST", "/v1/zones/acme.test/records", "operator", {"records": [{**rec, "name": "API."}]}),
+            ("PUT", "/v1/zones/acme.test/rrsets", "acme", {"records": [rec]}),
+            ("DELETE", "/v1/zones/acme.test/records", "acme", {"records": [{"name": "api"}]}),
+            ("POST", "/v1/zones/acme.test/changes", "acme",
+             {"remove": [{"name": "www", "type": "A", "data": "192.0.2.1"}], "add": [rec]}),
+            ("POST", "/v1/zones/acme.test/records", "acme",
+             {"records": [{"name": "_acme-challenge.api", "type": "TXT", "data": "x"}], "dry_run": True}),
+        ]
+        for method, path, key, body in cases:
+            resp, out = self.request(method, path, key, body=body)
+            self.assertError(resp, out, 403, "reserved_name")
+        resp, out = self.request("POST", "/v1/acme/present", "acme",
+                                 body={"fqdn": "_acme-challenge.api.acme.test.", "value": "v"})
+        self.assertError(resp, out, 403, "reserved_name")
+        self.assertFalse(self.writes())
+        # other names, and reading the reserved one, are not affected
+        resp, out = self.request("POST", "/v1/zones/acme.test/records", "acme",
+                                 body={"records": [{"name": "api2", "type": "A", "data": "192.0.2.2"}]})
+        self.assertEqual(resp.status, 200, out)
+        resp, out = self.request("GET", "/v1/zones/acme.test/records?name=api", "acme")
+        self.assertEqual(resp.status, 200, out)
+
+    def test_reserved_name_only_in_its_zone(self):
+        self.reserve("api.free.test")
+        resp, out = self.request("POST", "/v1/zones/acme.test/records", "acme",
+                                 body={"records": [{"name": "api", "type": "A", "data": "192.0.2.2"}]})
+        self.assertEqual(resp.status, 200, out)
+
+    def test_reserved_apex(self):
+        self.reserve("acme.test")
+        resp, out = self.request("POST", "/v1/zones/acme.test/records", "acme",
+                                 body={"records": [{"name": "@", "type": "A", "data": "192.0.2.2"}]})
+        self.assertError(resp, out, 403, "reserved_name")
+        resp, out = self.request("POST", "/v1/acme/present", "acme",
+                                 body={"fqdn": "_acme-challenge.acme.test", "value": "v"})
+        self.assertError(resp, out, 403, "reserved_name")
+
+    def test_other_tenant_gets_404_not_reserved(self):
+        self.reserve("api.acme.test")
+        resp, out = self.request("POST", "/v1/zones/acme.test/records", "beta",
+                                 body={"records": [{"name": "api", "type": "A", "data": "192.0.2.2"}]})
+        self.assertError(resp, out, 404, "zone_not_found")
+
     # key restrictions (DESIGN.md, ACME DNS-01 validation)
 
     def test_restricted_key_writes_only_inside(self):

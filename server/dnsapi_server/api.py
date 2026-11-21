@@ -218,6 +218,28 @@ class Api:
             raise ApiError(HTTPStatus.FORBIDDEN, "restricted_key",
                            "A key limited to some records cannot manage tenants and keys")
 
+    def reserved_names(self, zone):
+        """Names in `zone`, relative to it, that no key may change: the API's own host name
+        and its _acme-challenge (DESIGN.md, The API host name in DNS). Otherwise a key of a
+        tenant holding that zone could point the API elsewhere, or get a certificate for it."""
+        host = (self.store.settings().get("host") or "").lower().rstrip(".")
+        if not host or not (host == zone or host.endswith("." + zone)):
+            return set()
+        name = "@" if host == zone else host[: -len(zone) - 1]
+        acme = ACME_LABEL if name == "@" else f"{ACME_LABEL}.{name}"
+        return {name, acme}
+
+    def require_not_reserved(self, zone, records, field):
+        reserved = self.reserved_names(zone)
+        if not reserved:
+            return
+        for index, record in enumerate(records):
+            name = record["name"].strip().lower().rstrip(".") or "@"
+            if name in reserved:
+                raise ApiError(HTTPStatus.FORBIDDEN, "reserved_name",
+                               f"{record['name']} is the API's own host name and cannot be changed through the API",
+                               field=f"{field}[{index}]")
+
     def require_covered(self, req, records, field):
         """Refuse a request with any record outside the key's restrict."""
         restrict = req.principal.restrict
@@ -417,6 +439,8 @@ class Api:
         for field in ("add", "remove", "records"):
             self.require_covered(req, data.get(field, []), field)
         zone = zone or self.reachable_zone(req)
+        for field in ("add", "remove", "records"):
+            self.require_not_reserved(zone, data.get(field, []), field)
         if dry_run is None:
             dry_run = req.body.get("dry_run", False)
         if not isinstance(dry_run, bool):

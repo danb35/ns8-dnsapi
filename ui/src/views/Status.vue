@@ -32,6 +32,16 @@
         />
       </cv-column>
     </cv-row>
+    <cv-row v-if="!loading.overview && hostRecordAttention">
+      <cv-column>
+        <NsInlineNotification
+          :kind="hostRecordAttention.kind"
+          :title="hostRecordAttention.title"
+          :description="hostRecordAttention.description"
+          :showCloseButton="false"
+        />
+      </cv-column>
+    </cv-row>
     <cv-row v-if="!loading.overview && overview.dnshelper_error">
       <cv-column>
         <NsInlineNotification
@@ -437,6 +447,7 @@ export default {
         tenants: 0,
         keys_operator: 0,
         keys_tenant: 0,
+        host_record: null,
       },
       loading: {
         overview: false,
@@ -454,6 +465,17 @@ export default {
   },
   computed: {
     ...mapState(["instanceName", "instanceLabel", "core", "appName"]),
+    hostRecordAttention() {
+      // ok and created need no attention here; Settings shows every state
+      const record = this.overview.host_record;
+      if (
+        !record ||
+        ["ok", "created", "disabled", "not_managed"].includes(record.status)
+      ) {
+        return null;
+      }
+      return this.hostRecordStatus(record);
+    },
     installationNodeTitle() {
       if (this.status && this.status.node) {
         if (this.status.node_ui_name) {

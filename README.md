@@ -44,8 +44,8 @@ The schemas are in `imageroot/actions/<action>/validate-*.json`.
 
 | Action | Input | |
 |---|---|---|
-| `configure-module` | `host`, `lets_encrypt`, `http2https`, `ip_allowlist`, `rate_limit` | publish the API; an omitted field keeps its value |
-| `get-configuration` | none | the settings |
+| `configure-module` | `host`, `lets_encrypt`, `http2https`, `ip_allowlist`, `rate_limit`, `publish_host_record` | publish the API, adding the host name's CNAME to the node through dnshelper first when it can; an omitted field keeps its value |
+| `get-configuration` | none | the settings, and `host_record`: what configure-module found about the host name's DNS record |
 | `list-tenants`, `add-tenant`, `update-tenant`, `remove-tenant` | `name`, `enabled`, `id` | tenants; removing one removes its keys |
 | `assign-zone`, `unassign-zone` | `tenant`, `zone` | a zone dnshelper lets dnsapi write in; at most one tenant per zone |
 | `list-assignable-zones` | none | those zones, with `full` and their tenant |
@@ -69,7 +69,7 @@ are `{"error": {"code", "message", "field"}}`:
 |---|---|
 | 400 | `invalid_request`, `invalid_json` (with `field`), and dnshelper's `invalid_request`, `unsupported` |
 | 401 | `missing_key`, `invalid_key`, `key_expired` |
-| 403 | `insufficient_scope`, `tenant_disabled`, `address_not_allowed`, `restricted_key`, `outside_restriction`; dnshelper's `not_permitted`, `forbidden` (apex NS, SOA) |
+| 403 | `insufficient_scope`, `tenant_disabled`, `address_not_allowed`, `restricted_key`, `outside_restriction`, `reserved_name` (the API's own host name and its `_acme-challenge`); dnshelper's `not_permitted`, `forbidden` (apex NS, SOA) |
 | 404 | `not_found`, `zone_not_found`, `tenant_not_found`, `key_not_found` |
 | 409 | `stale` (a record to remove is gone), `conflict` (e.g. a CNAME beside other records), `zone_assigned` |
 | 413 | `body_too_large` |
@@ -208,6 +208,12 @@ history names the tenant.
   the first also drops assignments of zones dnsapi may no longer write in.
 - **Route**: `configure-module` calls Traefik's `set-route` with the instance name `MODULE_ID`,
   before saving anything; ns8-traefik removes the route with the module.
+- **The host name's record** (`pypkg/dnsapi/hostrecord.py`): before `set-route`, `has-zone` with
+  the CNAME (rules only), `get-records` at the name, `append-records` of a CNAME to the node's
+  `get-fqdn` (role `node:reader`) when nothing is there, then `check-propagation` until the name
+  servers answer, when a certificate is requested. Never overwrites, never fails the action; the
+  result is `state/host-record.json`. The service refuses changes to that name
+  (`reserved_name`).
 
 ## Using dnshelper
 

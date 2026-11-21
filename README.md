@@ -18,6 +18,7 @@ client for its API.
 - [Actions](#actions)
 - [API](#api)
 - [ACME endpoints](#acme-endpoints)
+- [Writing a portal integration](#writing-a-portal-integration)
 - [How it fits together](#how-it-fits-together)
 - [Using dnshelper](#using-dnshelper)
 - [Backup and restore](#backup-and-restore)
@@ -26,10 +27,9 @@ client for its API.
 
 ## Status
 
-Not released yet. Steps 1 to 4 of DESIGN.md's build order are done: the API behind Traefik on its
+Not released yet. Steps 1 to 5 of DESIGN.md's build order are done: the API behind Traefik on its
 own host name; tenants, keys, authentication and rate limits; reading and changing records; ACME
-DNS-01. The admin UI pages for tenants and keys (step 5) are not built; until then they are
-managed with the actions below.
+DNS-01; the admin UI (Status, Tenants, Keys, Activity, Settings) and the OpenAPI document.
 
 ## Install
 
@@ -51,6 +51,8 @@ The schemas are in `imageroot/actions/<action>/validate-*.json`.
 | `list-assignable-zones` | none | those zones, with `full` and their tenant |
 | `create-key` | `id`, `hash`, `owner`, `scope`, `label`, `allowlist`, `expires`, `restrict` | stores a key from its SHA-256: the action never sees the key |
 | `revoke-key`, `list-keys` | `id`; optional `owner` | |
+| `get-overview` | none | what the Status page shows: the API's address, the dnshelper instance, how many zones, tenants and keys |
+| `list-activity` | optional `limit` | the most recent changes, made through the API or the actions, newest first |
 
 `bin/create-key`, run with `runagent -m dnsapi1`, makes a key, stores its hash and prints it: it
 is how the first operator key is made. The API service calls the tenant and key actions itself
@@ -58,7 +60,8 @@ is how the first operator key is made. The API service calls the tenant and key 
 
 ## API
 
-Base URL `https://<host>/v1`. Send the key as `Authorization: Bearer <key>`; keys look like
+Base URL `https://<host>/v1`. The OpenAPI 3.1 document is at `/v1/openapi.json`, without a key
+(`server/make_openapi.py` writes it; a unit test checks that it describes every route). Send the key as `Authorization: Bearer <key>`; keys look like
 `dnsapi_<8 hex>_<52 base32>`. Bodies are JSON, at most 1 MB. A read key may only `GET`. Errors
 are `{"error": {"code", "message", "field"}}`:
 
@@ -144,6 +147,36 @@ key as the password and any user name, as those clients send it; nowhere else do
 
 The user guide shows the lego, acme.sh and certbot setups.
 
+## Writing a portal integration
+
+A billing or client portal (a Blesta or WHMCS module, for example) holds one operator key and acts
+for whichever customer is logged in. The administrator gives it the key and the API's address
+(user guide, "Connecting a billing or client portal").
+
+- **Customer signs up**: `POST /v1/tenants` `{"name"}`, and store the returned `id` with the
+  customer. For each of their domains, `PUT /v1/tenants/{id}/zones/{zone}`; 409
+  `zone_not_assignable` means the administrator has not let dnsapi use that zone yet, 409
+  `zone_assigned` that another tenant has it.
+- **Customer opens the DNS page**: `GET /v1/zones/{zone}/records`. Check first that the zone is
+  the customer's: the operator key reaches every zone, so the portal must not trust a zone name
+  from the browser. `GET /v1/zones` gives each zone's tenant. Show records with `owned_by` as
+  managed by that module.
+- **Customer edits a record**: send the old and the new value as `remove` and `add` to `POST
+  .../changes` with `"dry_run": true`. If the answer has `warnings`, show them and ask for
+  confirmation; then send the same request without `dry_run`. On 409 `stale`, someone changed the
+  record meanwhile: reload and let the customer try again.
+- **Customer adds or deletes records**: `POST .../records`, `DELETE .../records` (exact `data`
+  to delete one value of several), with a dry run first when warnings matter.
+- **Waiting for a change to be visible**: `GET .../propagation?name=&type=`.
+- **Customer scripts their own DNS**: `POST /v1/tenants/{id}/keys` makes a tenant key; show it
+  once. Revoke it with `DELETE .../keys/{key id}`.
+- **Customer leaves**: `DELETE /v1/tenants/{id}` removes the tenant and its keys and unassigns its
+  zones; no record changes.
+
+Set a timeout of at least 60 s, and back off on 429 for `Retry-After` seconds. Every request is
+listed on the administrator's Activity page with the operator key and the tenant; dnshelper's
+history names the tenant.
+
 ## How it fits together
 
 - **Two images.** `dnsapi` is the NS8 module (actions, systemd unit, UI); `dnsapi-server`
@@ -163,7 +196,12 @@ The user guide shows the lego, acme.sh and certbot setups.
 - **State** (`pypkg/dnsapi/state.py`): `settings.json`, `tenants.json`, `keys.json`, all 0600,
   replaced atomically under a lock; `runtime.json`, written by `bin/discover-runtime` (the
   dnshelper instance, Traefik's `PROXIES_DEPTH`); `usage/last-used.json`, written by the service.
-  The service rereads a file when its modification time changes.
+  The service rereads a file when its modification time changes. The Activity page reads
+  `usage/activity.jsonl` (the service's changes) and `usage/admin-activity.jsonl` (the actions'
+  changes not made by the service), each trimmed to recent entries: the module's user cannot read
+  the journal.
+- **Admin UI** (`ui/`): keys are made in the browser (`mixins/dnsapi.js`, `crypto.getRandomValues`
+  and SHA-256 with `crypto.subtle`), and only their hash is sent to `create-key`.
 - **The client address** is the last `X-Forwarded-For` entry, or `PROXIES_DEPTH` entries left of
   it when Traefik has trusted proxies. Traefik replaces a header a client sends itself.
 - **Events**: `service-dnshelper-changed`, `module-added` and `module-removed` rerun discovery;

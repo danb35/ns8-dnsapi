@@ -150,9 +150,53 @@ def caller():
     return os.environ.get("AGENT_TASK_USER") or "root"
 
 
+ACTIVITY_MAX_BYTES = 512 * 1024
+ACTIVITY_KEEP = 1000
+
+
 def audit(action, **fields):
+    """One journal line, and an entry for the admin UI's Activity page. Changes
+    the API service makes through these actions are recorded by the service
+    itself (usage/activity.jsonl), so they are not repeated here."""
     details = " ".join(f'{k}="{v}"' for k, v in fields.items())
     print(f'dnsapi audit: caller="{caller()}" action="{action}" {details}', file=sys.stderr)
+    if caller() == os.environ.get("AGENT_ID"):
+        return
+    entry = {"time": now(), "source": "admin", "caller": caller(), "action": action, "result": "ok", **fields}
+    usage = path("usage")
+    try:
+        os.makedirs(usage, exist_ok=True)
+        log = os.path.join(usage, "admin-activity.jsonl")
+        with open(path(".activity.lock"), "a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            with open(log, "a") as fp:
+                fp.write(json.dumps(entry, separators=(",", ":")) + "\n")
+            if os.path.getsize(log) > ACTIVITY_MAX_BYTES:
+                with open(log) as fp:
+                    keep = fp.readlines()[-ACTIVITY_KEEP:]
+                fd, tmp = tempfile.mkstemp(dir=usage, prefix=".admin-activity.")
+                with os.fdopen(fd, "w") as fp:
+                    fp.writelines(keep)
+                os.replace(tmp, log)
+    except OSError as exc:
+        print(f"cannot record the activity: {exc}", file=sys.stderr)
+
+
+def activity(limit):
+    """The most recent entries of the service's and the actions' activity, newest first."""
+    entries = []
+    for name in ("activity.jsonl", "admin-activity.jsonl"):
+        try:
+            with open(path(os.path.join("usage", name))) as fp:
+                for line in fp.readlines()[-limit:]:
+                    try:
+                        entries.append(json.loads(line))
+                    except ValueError:
+                        continue
+        except FileNotFoundError:
+            continue
+    entries.sort(key=lambda e: e.get("time", ""), reverse=True)
+    return entries[:limit]
 
 
 def tenant_view(tenant_id, tenant):

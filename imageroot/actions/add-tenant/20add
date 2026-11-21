@@ -25,5 +25,5 @@ with state.locked():
         "created": state.now(),
     }
     state.save_tenants(tenants)
-state.audit("add-tenant", tenant=tenant_id)
+state.audit("add-tenant", tenant=tenant_id, name=tenants[tenant_id]["name"])
 json.dump(state.tenant_view(tenant_id, tenants[tenant_id]), fp=sys.stdout)

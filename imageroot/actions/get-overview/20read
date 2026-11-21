@@ -1,0 +1,45 @@
+#!/usr/bin/env python3
+
+#
+# Copyright (C) 2026 Dan Brown
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+
+# Everything the admin UI's Status page shows, in one task: the API's
+# address, the dnshelper instance and whether dnsapi may use it, and how many
+# zones, tenants and keys there are.
+
+import json
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.environ["AGENT_INSTALL_DIR"], "pypkg"))
+import agent
+from dnsapi import dnshelper, state
+
+settings = state.load_settings()
+tenants = state.tenants()
+keys = state.keys()
+rdb = agent.redis_connect(use_replica=True)
+target = dnshelper.find_instance(rdb)
+result = {
+    "host": settings["host"],
+    "url": f"https://{settings['host']}/v1/" if settings["host"] else None,
+    "dnshelper": target.split("/", 1)[1] if target else None,
+    "dnshelper_error": None if target else "dnshelper_missing",
+    "zones_writable": 0,
+    "zones_full": 0,
+    "zones_assigned": sum(len(t.get("zones", [])) for t in tenants.values()),
+    "tenants": len(tenants),
+    "tenants_disabled": sum(1 for t in tenants.values() if not t.get("enabled", True)),
+    "keys_operator": sum(1 for k in keys.values() if k["owner"] == "operator"),
+    "keys_tenant": sum(1 for k in keys.values() if k["owner"] != "operator"),
+}
+if target:
+    try:
+        writable = dnshelper.writable_zones(target)
+        result["zones_writable"] = len(writable)
+        result["zones_full"] = sum(1 for z in writable.values() if z["full"])
+    except dnshelper.DnshelperError as exc:
+        result["dnshelper_error"] = exc.code
+json.dump(result, fp=sys.stdout)

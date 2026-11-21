@@ -29,6 +29,6 @@ with state.locked():
     # not be left behind.
     state.save_keys(keys)
     state.save_tenants(tenants)
-state.audit("remove-tenant", tenant=request["id"], zones=",".join(tenant.get("zones", [])),
+state.audit("remove-tenant", tenant=request["id"], name=tenant.get("name", ""), zones=",".join(tenant.get("zones", [])),
             keys=",".join(revoked))
 json.dump({}, fp=sys.stdout)

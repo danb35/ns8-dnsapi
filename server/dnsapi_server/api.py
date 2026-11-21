@@ -480,6 +480,11 @@ class Api:
         log.info('dnsapi audit: key="%s" tenant="%s" address="%s" action="%s" zone="%s" add=%s remove=%s '
                  'result="%s"', req.principal.key_id, tenant or "", req.client_ip, action, zone,
                  show(added), show(removed), outcome)
+        self.store.append_activity({
+            "source": "api", "key": req.principal.key_id, "owner": req.principal.owner,
+            "tenant": tenant, "address": req.client_ip, "action": action, "zone": zone,
+            "add": json.loads(show(added)), "remove": json.loads(show(removed)), "result": outcome,
+        })
 
     def apply_changes(self, req):
         self.require_write(req)
@@ -605,7 +610,7 @@ class Api:
         body = self.body_object(req)
         data = {k: body[k] for k in ("name", "enabled") if k in body}
         output = self.own_action("add-tenant", data)
-        self.audit(req, "add-tenant", tenant=output["id"])
+        self.audit(req, "add-tenant", tenant=output["id"], name=data.get("name", ""))
         return HTTPStatus.CREATED, self.tenant_view(output["id"])
 
     def update_tenant(self, req):
@@ -615,15 +620,16 @@ class Api:
         body = self.body_object(req)
         data = {k: body[k] for k in ("name", "enabled") if k in body}
         self.own_action("update-tenant", {"id": tenant_id, **data})
-        self.audit(req, "update-tenant", tenant=tenant_id)
+        self.audit(req, "update-tenant", tenant=tenant_id, name=self.store.tenant(tenant_id).get("name", ""))
         return HTTPStatus.OK, self.tenant_view(tenant_id)
 
     def remove_tenant(self, req):
         self.require_operator(req)
         self.require_write(req)
         tenant_id = self.tenant_param(req)
+        name = self.store.tenant(tenant_id).get("name", "")
         self.own_action("remove-tenant", {"id": tenant_id})
-        self.audit(req, "remove-tenant", tenant=tenant_id)
+        self.audit(req, "remove-tenant", tenant=tenant_id, name=name)
         return HTTPStatus.NO_CONTENT, None
 
     def assign_zone(self, req):
@@ -687,6 +693,12 @@ class Api:
         details = " ".join(f'{k}="{v}"' for k, v in fields.items())
         log.info('dnsapi audit: key="%s" owner="%s" address="%s" action="%s" %s result="ok"',
                  req.principal.key_id, req.principal.owner, req.client_ip, action, details)
+        # "key" is who acted; a key the operator made or revoked is "target_key"
+        extra = {("target_key" if k == "key" else k): v for k, v in fields.items()}
+        self.store.append_activity({
+            "source": "api", "key": req.principal.key_id, "owner": req.principal.owner,
+            "address": req.client_ip, "action": action, "result": "ok", **extra,
+        })
 
 
 ZONE = r"(?P<zone>[^/]+)"

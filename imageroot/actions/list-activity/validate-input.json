@@ -1,0 +1,24 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "list-activity input",
+    "$id": "http://schema.nethserver.org/dnsapi/list-activity-input.json",
+    "description": "The most recent changes; limit is the number of entries (default 200)",
+    "examples": [
+        {},
+        {
+            "limit": 50
+        }
+    ],
+    "type": [
+        "object",
+        "null"
+    ],
+    "additionalProperties": false,
+    "properties": {
+        "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2000
+        }
+    }
+}

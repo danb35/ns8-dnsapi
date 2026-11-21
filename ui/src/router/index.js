@@ -1,11 +1,15 @@
 //
-// Copyright (C) 2023 Nethesis S.r.l.
+// Copyright (C) 2023 Nethesis S.r.l. (ns8-kickstart template)
+// Copyright (C) 2026 Dan Brown
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 import Vue from "vue";
 import VueRouter from "vue-router";
 import Status from "../views/Status.vue";
 import Settings from "../views/Settings.vue";
+import Tenants from "../views/Tenants.vue";
+import Keys from "../views/Keys.vue";
+import Activity from "../views/Activity.vue";
 
 Vue.use(VueRouter);
 
@@ -15,6 +19,21 @@ const routes = [
     name: "Status",
     component: Status,
     alias: "/status", // important
+  },
+  {
+    path: "/tenants",
+    name: "Tenants",
+    component: Tenants,
+  },
+  {
+    path: "/keys",
+    name: "Keys",
+    component: Keys,
+  },
+  {
+    path: "/activity",
+    name: "Activity",
+    component: Activity,
   },
   {
     path: "/settings",

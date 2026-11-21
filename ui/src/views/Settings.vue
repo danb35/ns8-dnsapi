@@ -44,12 +44,8 @@
               <template #tooltip>
                 {{ $t("settings.lets_encrypt_tooltip") }}
               </template>
-              <template slot="text-left">{{
-                $t("settings.disabled")
-              }}</template>
-              <template slot="text-right">{{
-                $t("settings.enabled")
-              }}</template>
+              <template slot="text-left">{{ $t("common.disabled") }}</template>
+              <template slot="text-right">{{ $t("common.enabled") }}</template>
             </NsToggle>
             <NsToggle
               value="http2https"
@@ -58,22 +54,30 @@
               :disabled="stillLoading"
               class="mg-bottom"
             >
-              <template slot="text-left">{{
-                $t("settings.disabled")
-              }}</template>
-              <template slot="text-right">{{
-                $t("settings.enabled")
-              }}</template>
+              <template slot="text-left">{{ $t("common.disabled") }}</template>
+              <template slot="text-right">{{ $t("common.enabled") }}</template>
             </NsToggle>
             <cv-text-area
               :label="$t('settings.ip_allowlist')"
               v-model="ipAllowlist"
               :helper-text="$t('settings.ip_allowlist_helper')"
-              placeholder="203.0.113.10&#10;198.51.100.0/24"
+              placeholder="203.0.113.10, 198.51.100.0/24"
               :disabled="stillLoading"
               :invalid-message="error.ip_allowlist"
               class="mg-bottom"
               ref="ip_allowlist"
+            />
+            <NsTextInput
+              v-model.number="rateLimit"
+              type="number"
+              min="1"
+              max="10000"
+              :label="$t('settings.rate_limit')"
+              :helper-text="$t('settings.rate_limit_helper')"
+              :disabled="stillLoading"
+              :invalid-message="error.rate_limit"
+              class="mg-bottom"
+              ref="rate_limit"
             />
             <cv-row v-if="error.configureModule">
               <cv-column>
@@ -132,6 +136,7 @@ export default {
       isLetsEncryptEnabled: false,
       isHttpToHttpsEnabled: true,
       ipAllowlist: "",
+      rateLimit: 60,
       loading: {
         getConfiguration: false,
         configureModule: false,
@@ -142,6 +147,7 @@ export default {
         host: "",
         lets_encrypt: "",
         ip_allowlist: "",
+        rate_limit: "",
       },
     };
   },
@@ -221,6 +227,7 @@ export default {
       this.isLetsEncryptEnabled = config.lets_encrypt;
       this.isHttpToHttpsEnabled = config.http2https;
       this.ipAllowlist = config.ip_allowlist.join("\n");
+      this.rateLimit = config.rate_limit;
       this.focusElement("host");
     },
     validateConfigureModule() {
@@ -230,6 +237,17 @@ export default {
       if (!this.host) {
         this.error.host = this.$t("common.required");
         this.focusElement("host");
+        isValidationOk = false;
+      }
+      if (
+        !Number.isInteger(this.rateLimit) ||
+        this.rateLimit < 1 ||
+        this.rateLimit > 10000
+      ) {
+        this.error.rate_limit = this.$t("settings.rate_limit_invalid");
+        if (isValidationOk) {
+          this.focusElement("rate_limit");
+        }
         isValidationOk = false;
       }
       return isValidationOk;
@@ -291,6 +309,7 @@ export default {
             lets_encrypt: this.isLetsEncryptEnabled,
             http2https: this.isHttpToHttpsEnabled,
             ip_allowlist: [...new Set(this.ipAllowlistEntries)],
+            rate_limit: this.rateLimit,
           },
           extra: {
             title: this.$t("settings.configure_instance", {

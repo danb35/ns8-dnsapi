@@ -1,5 +1,6 @@
 <!--
-  Copyright (C) 2023 Nethesis S.r.l.
+  Copyright (C) 2023 Nethesis S.r.l. (ns8-kickstart template)
+  Copyright (C) 2026 Dan Brown
   SPDX-License-Identifier: GPL-3.0-or-later
 -->
 <template>
@@ -7,6 +8,135 @@
     <cv-row>
       <cv-column class="page-title">
         <h2>{{ $t("status.title") }}</h2>
+      </cv-column>
+    </cv-row>
+    <cv-row v-if="error.overview">
+      <cv-column>
+        <NsInlineNotification
+          kind="error"
+          :title="$t('action.get-overview')"
+          :description="error.overview"
+          :showCloseButton="false"
+        />
+      </cv-column>
+    </cv-row>
+    <cv-row v-if="!loading.overview && overview.loaded && !overview.host">
+      <cv-column>
+        <NsInlineNotification
+          kind="info"
+          :title="$t('status.not_configured_title')"
+          :description="$t('status.not_configured_description')"
+          :actionLabel="$t('status.go_to_settings')"
+          @action="goToAppPage(instanceName, 'settings')"
+          :showCloseButton="false"
+        />
+      </cv-column>
+    </cv-row>
+    <cv-row v-if="!loading.overview && overview.dnshelper_error">
+      <cv-column>
+        <NsInlineNotification
+          kind="warning"
+          :title="$t('zones.unavailable_title')"
+          :description="$t('zones.unavailable_' + overview.dnshelper_error)"
+          :showCloseButton="false"
+        />
+      </cv-column>
+    </cv-row>
+    <cv-row
+      v-else-if="
+        !loading.overview && overview.loaded && !overview.zones_writable
+      "
+    >
+      <cv-column>
+        <NsInlineNotification
+          kind="info"
+          :title="$t('status.no_zones_title')"
+          :description="
+            $t('status.no_zones_description', { module: instanceName })
+          "
+          :showCloseButton="false"
+        />
+      </cv-column>
+    </cv-row>
+    <cv-row>
+      <cv-column :md="4" :max="4">
+        <NsInfoCard
+          light
+          :title="overview.host || '-'"
+          :description="$t('status.api_host')"
+          :icon="Link32"
+          :loading="loading.overview"
+          class="min-height-card"
+        />
+      </cv-column>
+      <cv-column :md="4" :max="4">
+        <NsInfoCard
+          light
+          :title="overview.dnshelper || $t('status.dnshelper_none')"
+          :description="$t('status.dnshelper')"
+          :icon="DataBase32"
+          :loading="loading.overview"
+          class="min-height-card"
+        />
+      </cv-column>
+      <cv-column :md="4" :max="4">
+        <NsInfoCard
+          light
+          :title="'' + overview.zones_writable"
+          :description="
+            $tc('status.zones_writable', overview.zones_writable, {
+              full: overview.zones_full,
+              assigned: overview.zones_assigned,
+            })
+          "
+          :icon="Catalog32"
+          :loading="loading.overview"
+          class="min-height-card"
+        />
+      </cv-column>
+      <cv-column :md="4" :max="4">
+        <NsInfoCard
+          light
+          :title="'' + overview.tenants"
+          :description="$tc('status.tenants', overview.tenants)"
+          :icon="User32"
+          :loading="loading.overview"
+          class="min-height-card"
+        >
+          <template slot="content">
+            <NsButton
+              kind="ghost"
+              :icon="ArrowRight20"
+              :disabled="loading.overview"
+              @click="goToAppPage(instanceName, 'tenants')"
+              >{{ $t("status.manage_tenants") }}</NsButton
+            >
+          </template>
+        </NsInfoCard>
+      </cv-column>
+      <cv-column :md="4" :max="4">
+        <NsInfoCard
+          light
+          :title="'' + (overview.keys_operator + overview.keys_tenant)"
+          :description="
+            $tc('status.keys', overview.keys_operator + overview.keys_tenant, {
+              operator: overview.keys_operator,
+            })
+          "
+          :icon="Locked32"
+          :loading="loading.overview"
+          class="min-height-card"
+        >
+          <template slot="content">
+            <NsButton
+              kind="ghost"
+              :icon="ArrowRight20"
+              :disabled="loading.overview"
+              @click="goToAppPage(instanceName, 'keys')"
+              >{{ $t("status.manage_keys") }}</NsButton
+            >
+          </template>
+        </NsInfoCard>
       </cv-column>
     </cv-row>
     <cv-row v-if="error.getStatus">
@@ -257,6 +387,7 @@
 <script>
 import to from "await-to-js";
 import { mapState } from "vuex";
+import DnsapiService from "../mixins/dnsapi";
 import {
   QueryParamService,
   TaskService,
@@ -268,6 +399,7 @@ import {
 export default {
   name: "Status",
   mixins: [
+    DnsapiService,
     TaskService,
     QueryParamService,
     IconService,
@@ -293,12 +425,27 @@ export default {
       },
       backupRepositories: [],
       backups: [],
+      overview: {
+        loaded: false,
+        host: null,
+        url: null,
+        dnshelper: null,
+        dnshelper_error: null,
+        zones_writable: 0,
+        zones_full: 0,
+        zones_assigned: 0,
+        tenants: 0,
+        keys_operator: 0,
+        keys_tenant: 0,
+      },
       loading: {
+        overview: false,
         getStatus: false,
         listBackupRepositories: false,
         listBackups: false,
       },
       error: {
+        overview: "",
         getStatus: "",
         listBackupRepositories: "",
         listBackups: "",
@@ -346,10 +493,22 @@ export default {
     clearTimeout(this.redirectTimeout);
   },
   created() {
+    this.loadOverview();
     this.getStatus();
     this.listBackupRepositories();
   },
   methods: {
+    async loadOverview() {
+      this.loading.overview = true;
+      this.error.overview = "";
+      try {
+        const out = await this.callAction("get-overview");
+        this.overview = { ...out, loaded: true };
+      } catch (err) {
+        this.error.overview = this.errorText(err);
+      }
+      this.loading.overview = false;
+    },
     async getStatus() {
       this.loading.getStatus = true;
       this.error.getStatus = "";

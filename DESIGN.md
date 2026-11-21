@@ -369,6 +369,19 @@ This is not the customer control panel: only cluster administrators can reach it
      are the same for a dry run and the write. A write counts twice against the rate limit.
    - Every change, including a refused one, logs one audit line: key, tenant, address, action,
      zone, records added and removed, outcome.
+   - Tested on the test node (2026-11-21) on `example.com` (ns8-powerdns), with a temporary full
+     rule for `module/dnsapi2`, removed afterwards, and test records only (the zone ended as it
+     began, SOA and NS): add; an edit as a dry run (nothing written) and for real; the same edit
+     again refused with 409 `stale`; an RRset replaced; a CNAME beside an A record refused (409
+     `conflict`); the apex NS refused (403 `forbidden`); a TXT value with spaces kept unquoted; a
+     read key refused; a record written by a module (`dnsapi2` itself, without `on_behalf_of`)
+     shown with `owned_by` and its deletion warned about, as a dry run and for real; an operator
+     key deleting a tenant's records. dnshelper's audit lines carry
+     `on_behalf_of="<tenant>:<key id>"`. A write took about 0.8 s (`list-owners`, then the
+     write), a read 0.42 s.
+   - Finding for dnshelper, not changed here: adding a CNAME where A records exist is refused
+     with the message "dnsapi-test-a has a CNAME, which cannot coexist with A records", which
+     names the wrong side; the code (`conflict`) is right.
 4. ACME DNS-01: key restrictions, zones with partial access, `/v1/acme/present` and `/cleanup`;
    README walk-throughs for lego, acme.sh and certbot.
 5. Admin UI; OpenAPI document; README with a Blesta/WHMCS-style walk-through.

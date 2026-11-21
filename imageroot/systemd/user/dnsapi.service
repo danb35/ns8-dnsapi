@@ -1,22 +1,28 @@
 #
-# Copyright (C) 2023 Nethesis S.r.l.
+# Copyright (C) 2023 Nethesis S.r.l. (ns8-kickstart template)
+# Copyright (C) 2026 Dan Brown
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 
 #
-# This systemd unit starts a dnsapi instance using Podman.
-# Most parts of this file come from podman-generate-systemd.
+# The dnsapi API service (server/ in the repository), one rootless
+# container. It listens on 127.0.0.1 only; Traefik routes the API host name
+# to it (configure-module).
 #
 [Unit]
-Description=dnsapi server
+Description=dnsapi API server
+Wants=network-online.target
+After=network-online.target
 
 [Service]
 Environment=PODMAN_SYSTEMD_UNIT=%n
 EnvironmentFile=%E/state/environment
 WorkingDirectory=%E/state
 Restart=always
+TimeoutStopSec=70
+# podman stop sends SIGTERM; conmon then exits 143 (137 after SIGKILL).
+SuccessExitStatus=143 137
 ExecStartPre=/bin/rm -f %t/dnsapi.pid %t/dnsapi.ctr-id
-ExecStartPre=-runagent discover-smarthost
 ExecStart=/usr/bin/podman run \
     --detach \
     --conmon-pidfile=%t/dnsapi.pid \
@@ -24,8 +30,14 @@ ExecStart=/usr/bin/podman run \
     --cgroups=no-conmon \
     --replace --name=%N \
     --publish=127.0.0.1:${TCP_PORT}:8080 \
-    --env-file=smarthost.env \
-    ${ECHO_SERVER_IMAGE}
+    --read-only \
+    ${DNSAPI_SERVER_IMAGE}
+# podman run --detach returns once the container exists, before the service
+# listens: hold the start until it answers, so configure-module returns a
+# working API.
+ExecStartPost=/usr/bin/curl --silent --fail --output /dev/null --max-time 3 \
+    --retry 30 --retry-delay 1 --retry-max-time 30 --retry-connrefused --retry-all-errors \
+    http://127.0.0.1:${TCP_PORT}/v1/status
 ExecStop=/usr/bin/podman stop --ignore --cidfile %t/dnsapi.ctr-id -t 10
 ExecStopPost=/usr/bin/podman rm --ignore -f --cidfile %t/dnsapi.ctr-id
 PIDFile=%t/dnsapi.pid

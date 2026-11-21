@@ -24,7 +24,21 @@
         "title": "Settings",
         "configure_instance": "Configure {instance}",
         "save": "Save",
-        "test_field": "Test field"
+        "host": "API host name",
+        "host_helper": "Clients reach the API at https://<host name>/v1/. It needs a DNS record pointing to this node, and must not be used by another application.",
+        "lets_encrypt": "Let's Encrypt certificate",
+        "lets_encrypt_tooltip": "The host name must resolve to this node from the internet, and port 80 must be reachable, for the certificate to be issued.",
+        "http2https": "Redirect HTTP to HTTPS",
+        "ip_allowlist": "Allowed client addresses",
+        "ip_allowlist_helper": "One IP address or CIDR network per line. Traefik refuses every other client. Leave empty to allow any address.",
+        "enabled": "Enabled",
+        "disabled": "Disabled",
+        "host_required": "Required",
+        "host_is_not_valid_not_localhost": "Enter a fully qualified host name",
+        "newcert_acme_error": "Let's Encrypt did not issue a certificate for this host name",
+        "bad_ip_address": "Not a valid IP address or network: {value}",
+        "format": "Invalid value",
+        "pattern": "Enter a fully qualified host name"
     },
     "about": {
         "title": "About"

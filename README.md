@@ -10,8 +10,8 @@ See [DESIGN.md](DESIGN.md) for the design.
 
 ## Status
 
-Under development: nothing of the API is built yet. The module is still the ns8-kickstart
-scaffold (an echo server behind a Traefik route), renamed to `dnsapi`.
+Step 1 of DESIGN.md's build order: the API service runs behind Traefik on its own host name and
+answers `GET /v1/status`. Tenants, keys and the DNS endpoints are not built yet.
 
 ## Install
 
@@ -26,14 +26,31 @@ Output example:
 
 ## Configure
 
-Let's assume that the dnsapi instance is named `dnsapi1`.
+Let's assume that the dnsapi instance is named `dnsapi1`. The API needs a host name of its own,
+with a DNS record pointing to the node:
 
-    api-cli run module/dnsapi1/configure-module --data '{}'
+    api-cli run module/dnsapi1/configure-module --data '{"host": "dnsapi.example.com", "lets_encrypt": true, "http2https": true, "ip_allowlist": []}'
 
-The above command starts the instance and routes the `/dnsapi` path to it. Send a test HTTP
-request to the backend service:
+- `host` (required the first time): the API is served at `https://<host>/v1/`.
+- `lets_encrypt`: request a Let's Encrypt certificate. The action fails, changing nothing, if the
+  certificate is not issued. Default `false`.
+- `http2https`: redirect plain HTTP to HTTPS. Default `true`.
+- `ip_allowlist`: IP addresses or CIDR networks that Traefik lets through, for example only the
+  billing server. Empty allows every address. Default empty.
 
-    curl http://127.0.0.1/dnsapi/
+An omitted field keeps its current value. The settings are in `state/settings.json`, which is
+backed up. Check the service:
+
+    curl https://dnsapi.example.com/v1/status
+
+which answers `{"status": "ok"}`.
+
+## Development
+
+- `server/`: the API service (Python, standard library only) and its `Containerfile`.
+  `build-images.sh` builds it as the `dnsapi-server` image and runs `server/tests` inside it. Run
+  the tests locally with `cd server && python3 -m unittest discover -s tests`.
+- `imageroot/`: the NS8 actions and the systemd unit; `ui/`: the admin UI.
 
 ## Uninstall
 

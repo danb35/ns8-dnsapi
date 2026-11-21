@@ -1,0 +1,36 @@
+#!/usr/bin/env python3
+
+#
+# Copyright (C) 2026 Dan Brown
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+
+#
+# Restic has put back state/settings.json (etc/state-include.conf). Run
+# configure-module with an empty request: it keeps every restored setting,
+# publishes the Traefik route on this node and starts the service.
+#
+
+import os
+import sys
+import json
+
+import agent
+import agent.tasks
+
+try:
+    with open("settings.json") as fp:
+        host = json.load(fp).get("host")
+except FileNotFoundError:
+    host = None
+
+if not host:
+    print("The backup has no API host name: the module stays unconfigured", file=sys.stderr)
+    sys.exit(0)
+
+response = agent.tasks.run(
+    agent_id=os.environ["AGENT_ID"],
+    action="configure-module",
+    data={},
+)
+agent.assert_exp(response["exit_code"] == 0)

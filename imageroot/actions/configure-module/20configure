@@ -1,36 +1,87 @@
 #!/usr/bin/env python3
 
 #
-# Copyright (C) 2023 Nethesis S.r.l.
+# Copyright (C) 2026 Dan Brown
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 
+#
+# Merge the request into state/settings.json and publish the API on its
+# host name through Traefik (DESIGN.md, Security, Transport). The route
+# instance is MODULE_ID, so ns8-traefik removes it with the module.
+#
+# set-route runs before the settings are saved: when Traefik refuses them
+# (an address it can't parse, a Let's Encrypt certificate it can't get),
+# the action fails with nothing changed.
+#
+
+import ipaddress
 import json
+import os
 import sys
+
 import agent
 import agent.tasks
-import os
+
+SETTINGS = "settings.json"
+DEFAULTS = {"host": None, "lets_encrypt": False, "http2https": True, "ip_allowlist": []}
+
+
+def validation_failed(field, value, error):
+    agent.set_status("validation-failed")
+    json.dump([{"field": field, "parameter": field, "value": value, "error": error}], fp=sys.stdout)
+    sys.exit(2)
+
 
 request = json.load(sys.stdin)
 
-# TODO: do something with the request payload. For example configure a
-# custom route in our web router. Here the path is hardcoded as
-# 'dnsapi'.
+try:
+    with open(SETTINGS) as fp:
+        settings = {**DEFAULTS, **json.load(fp)}
+except FileNotFoundError:
+    settings = dict(DEFAULTS)
 
-# Configure Traefik to route "/dnsapi" path requests to the dnsapi
-# service. Since the "instance" attribute starts with MODULE_ID, the route
-# will be removed automatically with the module.
+for key in DEFAULTS:
+    if key in request:
+        settings[key] = request[key]
+
+if not settings["host"]:
+    validation_failed("host", "", "host_required")
+settings["host"] = settings["host"].lower().rstrip(".")
+
+for value in settings["ip_allowlist"]:
+    try:
+        ipaddress.ip_network(value, strict=False)
+    except ValueError:
+        validation_failed("ip_allowlist", value, "bad_ip_address")
+
 response = agent.tasks.run(
-    agent_id=agent.resolve_agent_id('traefik@node'),
-    action='set-route',
+    agent_id=agent.resolve_agent_id("traefik@node"),
+    action="set-route",
     data={
-        'instance': os.environ['MODULE_ID'],
-        'url':  'http://127.0.0.1:' + os.environ["TCP_PORT"],
-        'http2https': False,
-        'lets_encrypt': False,
-        'path': '/dnsapi',
+        "instance": os.environ["MODULE_ID"],
+        "url": "http://127.0.0.1:" + os.environ["TCP_PORT"],
+        "host": settings["host"],
+        # Clear a path prefix left from an earlier route: the API owns the
+        # whole host name.
+        "path": None,
+        "lets_encrypt": settings["lets_encrypt"],
+        "lets_encrypt_check": settings["lets_encrypt"],
+        "http2https": settings["http2https"],
+        # An empty list removes Traefik's allowlist middleware.
+        "ip_allowlist": settings["ip_allowlist"],
     },
 )
 
-# Check if traefik configuration has been successfull
-agent.assert_exp(response['exit_code'] == 0)
+if response["exit_code"] != 0:
+    print(agent.SD_ERR + "set-route failed: " + json.dumps(response.get("error") or response.get("output")), file=sys.stderr)
+    # Traefik's validation errors name the same fields as this action's input.
+    if isinstance(response.get("output"), list):
+        agent.set_status("validation-failed")
+        json.dump(response["output"], fp=sys.stdout)
+        sys.exit(2)
+    sys.exit(1)
+
+with agent.safe_open(SETTINGS, "w") as fp:
+    json.dump(settings, fp, indent=2)
+    fp.write("\n")

@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
 
 #
-# Copyright (C) 2023 Nethesis S.r.l.
+# Copyright (C) 2026 Dan Brown
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 
 import json
 import sys
-import agent
 
-config = {}
+DEFAULTS = {"host": None, "lets_encrypt": False, "http2https": True, "ip_allowlist": []}
 
-json.dump(config, fp=sys.stdout)
+try:
+    with open("settings.json") as fp:
+        settings = {**DEFAULTS, **json.load(fp)}
+except FileNotFoundError:
+    settings = dict(DEFAULTS)
+
+json.dump({key: settings[key] for key in DEFAULTS}, fp=sys.stdout)

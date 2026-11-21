@@ -1,5 +1,6 @@
 <!--
-  Copyright (C) 2023 Nethesis S.r.l.
+  Copyright (C) 2023 Nethesis S.r.l. (ns8-kickstart template)
+  Copyright (C) 2026 Dan Brown
   SPDX-License-Identifier: GPL-3.0-or-later
 -->
 <template>
@@ -23,15 +24,57 @@
       <cv-column>
         <cv-tile light>
           <cv-form @submit.prevent="configureModule">
-            <!-- TODO remove test field and code configuration fields -->
-            <cv-text-input
-              :label="$t('settings.test_field')"
-              v-model="testField"
-              :placeholder="$t('settings.test_field')"
-              :disabled="loading.getConfiguration || loading.configureModule"
-              :invalid-message="error.testField"
-              ref="testField"
-            ></cv-text-input>
+            <NsTextInput
+              :label="$t('settings.host')"
+              v-model.trim="host"
+              placeholder="dnsapi.example.com"
+              :helper-text="$t('settings.host_helper')"
+              :disabled="stillLoading"
+              :invalid-message="error.host"
+              class="mg-bottom"
+              ref="host"
+            />
+            <NsToggle
+              value="letsEncrypt"
+              :label="$t('settings.lets_encrypt')"
+              v-model="isLetsEncryptEnabled"
+              :disabled="stillLoading"
+              class="mg-bottom"
+            >
+              <template #tooltip>
+                {{ $t("settings.lets_encrypt_tooltip") }}
+              </template>
+              <template slot="text-left">{{
+                $t("settings.disabled")
+              }}</template>
+              <template slot="text-right">{{
+                $t("settings.enabled")
+              }}</template>
+            </NsToggle>
+            <NsToggle
+              value="http2https"
+              :label="$t('settings.http2https')"
+              v-model="isHttpToHttpsEnabled"
+              :disabled="stillLoading"
+              class="mg-bottom"
+            >
+              <template slot="text-left">{{
+                $t("settings.disabled")
+              }}</template>
+              <template slot="text-right">{{
+                $t("settings.enabled")
+              }}</template>
+            </NsToggle>
+            <cv-text-area
+              :label="$t('settings.ip_allowlist')"
+              v-model="ipAllowlist"
+              :helper-text="$t('settings.ip_allowlist_helper')"
+              placeholder="203.0.113.10&#10;198.51.100.0/24"
+              :disabled="stillLoading"
+              :invalid-message="error.ip_allowlist"
+              class="mg-bottom"
+              ref="ip_allowlist"
+            />
             <cv-row v-if="error.configureModule">
               <cv-column>
                 <NsInlineNotification
@@ -46,7 +89,7 @@
               kind="primary"
               :icon="Save20"
               :loading="loading.configureModule"
-              :disabled="loading.getConfiguration || loading.configureModule"
+              :disabled="stillLoading"
               >{{ $t("settings.save") }}</NsButton
             >
           </cv-form>
@@ -85,7 +128,10 @@ export default {
         page: "settings",
       },
       urlCheckInterval: null,
-      testField: "", // TODO remove
+      host: "",
+      isLetsEncryptEnabled: false,
+      isHttpToHttpsEnabled: true,
+      ipAllowlist: "",
       loading: {
         getConfiguration: false,
         configureModule: false,
@@ -93,13 +139,23 @@ export default {
       error: {
         getConfiguration: "",
         configureModule: "",
-        testField: "", // TODO remove
-        // TODO add all validation error fields
+        host: "",
+        lets_encrypt: "",
+        ip_allowlist: "",
       },
     };
   },
   computed: {
     ...mapState(["instanceName", "core", "appName"]),
+    stillLoading() {
+      return this.loading.getConfiguration || this.loading.configureModule;
+    },
+    ipAllowlistEntries() {
+      return this.ipAllowlist
+        .split(/[\s,]+/)
+        .map((entry) => entry.trim())
+        .filter((entry) => entry);
+    },
   },
   beforeRouteEnter(to, from, next) {
     next((vm) => {
@@ -161,28 +217,20 @@ export default {
       this.loading.getConfiguration = false;
       const config = taskResult.output;
 
-      // TODO set configuration fields
-      // ...
-
-      // TODO remove
-      console.log("config", config);
-
-      // TODO focus first configuration field
-      this.focusElement("testField");
+      this.host = config.host || "";
+      this.isLetsEncryptEnabled = config.lets_encrypt;
+      this.isHttpToHttpsEnabled = config.http2https;
+      this.ipAllowlist = config.ip_allowlist.join("\n");
+      this.focusElement("host");
     },
     validateConfigureModule() {
       this.clearErrors(this);
       let isValidationOk = true;
 
-      // TODO remove testField and validate configuration fields
-      if (!this.testField) {
-        // test field cannot be empty
-        this.error.testField = this.$t("common.required");
-
-        if (isValidationOk) {
-          this.focusElement("testField");
-          isValidationOk = false;
-        }
+      if (!this.host) {
+        this.error.host = this.$t("common.required");
+        this.focusElement("host");
+        isValidationOk = false;
       }
       return isValidationOk;
     },
@@ -195,7 +243,10 @@ export default {
 
         if (field !== "(root)") {
           // set i18n error message
-          this.error[field] = this.$t("settings." + validationError.error);
+          // Traefik reports a certificate failure on the host field
+          this.error[field] = this.$t("settings." + validationError.error, {
+            value: validationError.value,
+          });
 
           if (!focusAlreadySet) {
             this.focusElement(field);
@@ -236,7 +287,10 @@ export default {
         this.createModuleTaskForApp(this.instanceName, {
           action: taskAction,
           data: {
-            // TODO configuration fields
+            host: this.host,
+            lets_encrypt: this.isLetsEncryptEnabled,
+            http2https: this.isHttpToHttpsEnabled,
+            ip_allowlist: [...new Set(this.ipAllowlistEntries)],
           },
           extra: {
             title: this.$t("settings.configure_instance", {

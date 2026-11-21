@@ -1,126 +1,124 @@
 # ns8-dnsapi
 
 An HTTPS API for [NethServer 8](https://github.com/NethServer/ns8-core) that lets software
-outside the cluster (a billing or client portal such as Blesta or WHMCS, or the operator's own
-scripts) manage DNS records for the operator's customers. It holds no DNS provider code: every
-read and change goes through [ns8-dnshelper](https://github.com/danb35/ns8-dnshelper) (0.7.0 or
-later), limited by the access rules its administrator grants this module.
+outside the cluster manage DNS records: a billing or client portal (Blesta, WHMCS, the operator's
+own) acting for the operator's customers, customers' own scripts, and systems that validate
+certificates with ACME DNS-01, including ones the internet cannot reach. It holds no DNS provider
+code: every read and change goes through [ns8-dnshelper](https://github.com/danb35/ns8-dnshelper)
+(0.7.0 or later), limited by the access rules its administrator grants this module. See
+[DESIGN.md](DESIGN.md) for the design, the decisions and what was tested on a node.
 
-See [DESIGN.md](DESIGN.md) for the design.
+**Administering it?** The [user guide](docs/USER-GUIDE.md) explains publishing the API, letting
+it use zones, tenants and keys, connecting a portal, setting up ACME clients, and what the errors
+mean. This README is for people who build, test or work on dnsapi, and for developers who write a
+client for its API.
+
+- [Status](#status)
+- [Install](#install)
+- [Actions](#actions)
+- [API](#api)
+- [ACME endpoints](#acme-endpoints)
+- [How it fits together](#how-it-fits-together)
+- [Using dnshelper](#using-dnshelper)
+- [Backup and restore](#backup-and-restore)
+- [Development](#development)
+- [Testing](#testing)
 
 ## Status
 
-Steps 1 to 4 of DESIGN.md's build order: the API runs behind Traefik on its own host name, with
-tenants, API keys, rate limits, reading and changing records, and ACME DNS-01 validation for other
-systems. The admin UI pages for tenants and keys (step 5) are not built yet.
+Not released yet. Steps 1 to 4 of DESIGN.md's build order are done: the API behind Traefik on its
+own host name; tenants, keys, authentication and rate limits; reading and changing records; ACME
+DNS-01. The admin UI pages for tenants and keys (step 5) are not built; until then they are
+managed with the actions below.
 
 ## Install
 
-Instantiate the module with:
-
     add-module ghcr.io/danb35/dnsapi:latest 1
+    api-cli run module/dnsapi1/configure-module --data '{"host": "dnsapi.example.com", "lets_encrypt": true}'
 
-The output of the command will return the instance name.
-Output example:
+The user guide has the details. To remove an instance: `remove-module --no-preserve dnsapi1`.
 
-    {"module_id": "dnsapi1", "image_name": "dnsapi", "image_url": "ghcr.io/danb35/dnsapi:latest"}
+## Actions
 
-## Configure
+The schemas are in `imageroot/actions/<action>/validate-*.json`.
 
-Let's assume that the dnsapi instance is named `dnsapi1`. The API needs a host name of its own,
-with a DNS record pointing to the node:
+| Action | Input | |
+|---|---|---|
+| `configure-module` | `host`, `lets_encrypt`, `http2https`, `ip_allowlist`, `rate_limit` | publish the API; an omitted field keeps its value |
+| `get-configuration` | none | the settings |
+| `list-tenants`, `add-tenant`, `update-tenant`, `remove-tenant` | `name`, `enabled`, `id` | tenants; removing one removes its keys |
+| `assign-zone`, `unassign-zone` | `tenant`, `zone` | a zone dnshelper lets dnsapi write in; at most one tenant per zone |
+| `list-assignable-zones` | none | those zones, with `full` and their tenant |
+| `create-key` | `id`, `hash`, `owner`, `scope`, `label`, `allowlist`, `expires`, `restrict` | stores a key from its SHA-256: the action never sees the key |
+| `revoke-key`, `list-keys` | `id`; optional `owner` | |
 
-    api-cli run module/dnsapi1/configure-module --data '{"host": "dnsapi.example.com", "lets_encrypt": true, "http2https": true, "ip_allowlist": []}'
-
-- `host` (required the first time): the API is served at `https://<host>/v1/`.
-- `lets_encrypt`: request a Let's Encrypt certificate. The action fails, changing nothing, if the
-  certificate is not issued. Default `false`.
-- `http2https`: redirect plain HTTP to HTTPS. Default `true`.
-- `ip_allowlist`: IP addresses or CIDR networks that Traefik lets through, for example only the
-  billing server. Empty allows every address. Default empty.
-- `rate_limit`: DNS requests per minute for each key. Every request that calls dnshelper counts,
-  reads too, since the DNS hosts' own limits count them. Default 60.
-
-An omitted field keeps its current value. The settings are in `state/settings.json`, which is
-backed up. Check the service:
-
-    curl https://dnsapi.example.com/v1/status
-
-which answers `{"status": "ok"}`.
-
-## Give dnsapi zones
-
-dnsapi can hand a tenant a zone that dnshelper lets it write in. On dnshelper's Access page, add a
-rule for `module/dnsapi1` on the zones the API may manage:
-
-- the "API module (all records)" preset, for a hosting customer who manages the whole zone;
-- the ACME preset, when the zone is used only for certificate validation (see
-  [ACME DNS-01 validation](#acme-dns-01-validation)).
-
-dnshelper's rule is the limit: a change it does not cover is refused (403 `not_permitted`), and
-`"full": false` in the zone lists says that the zone is only partly writable. Then:
-
-    api-cli run module/dnsapi1/list-assignable-zones
-
-## Keys
-
-Keys look like `dnsapi_<id>_<secret>` and are shown once, when they are made: only their SHA-256
-is stored. Make the first operator key (the one a billing portal uses) from a shell on the node:
-
-    runagent -m dnsapi1 create-key --owner operator --scope write --label "billing portal"
-
-`--allowlist 203.0.113.10,198.51.100.0/24` limits where it may be used from, `--expires
-2027-12-31T00:00:00Z` when, and `--restrict acme` (or `--restrict 'www,mail' --types A,AAAA`) which
-records: names relative to the zone, with `*` and `?`, as in dnshelper's rules. A restricted key
-cannot manage tenants and keys, and a restriction cannot be changed: revoke the key and make
-another. `api-cli run module/dnsapi1/list-keys` lists the keys and when each
-was last used; `api-cli run module/dnsapi1/revoke-key --data '{"id": "<key id>"}'` revokes one.
+`bin/create-key`, run with `runagent -m dnsapi1`, makes a key, stores its hash and prints it: it
+is how the first operator key is made. The API service calls the tenant and key actions itself
+(see [How it fits together](#how-it-fits-together)); it cannot make or revoke operator keys.
 
 ## API
 
-Send the key as `Authorization: Bearer <key>`. Errors are `{"error": {"code", "message",
-"field"}}`. A read key may only `GET`.
+Base URL `https://<host>/v1`. Send the key as `Authorization: Bearer <key>`; keys look like
+`dnsapi_<8 hex>_<52 base32>`. Bodies are JSON, at most 1 MB. A read key may only `GET`. Errors
+are `{"error": {"code", "message", "field"}}`:
+
+| Status | Codes |
+|---|---|
+| 400 | `invalid_request`, `invalid_json` (with `field`), and dnshelper's `invalid_request`, `unsupported` |
+| 401 | `missing_key`, `invalid_key`, `key_expired` |
+| 403 | `insufficient_scope`, `tenant_disabled`, `address_not_allowed`, `restricted_key`, `outside_restriction`; dnshelper's `not_permitted`, `forbidden` (apex NS, SOA) |
+| 404 | `not_found`, `zone_not_found`, `tenant_not_found`, `key_not_found` |
+| 409 | `stale` (a record to remove is gone), `conflict` (e.g. a CNAME beside other records), `zone_assigned` |
+| 413 | `body_too_large` |
+| 429 | `rate_limited`, with `Retry-After` |
+| 502, 503, 504 | `upstream_error` (the DNS host failed), `dnshelper_missing` or `unavailable`, `upstream_timeout` |
+
+A tenant key gets 404, not 403, for a zone it does not own and for the operator endpoints, so a
+key cannot be used to find out which zones are managed.
 
 | Request | Key | |
 |---|---|---|
-| `GET /v1/status` | none | liveness |
-| `GET /v1/zones` | any | the key's zones (operator: every assignable zone, with its tenant) |
+| `GET /v1/status` | none | liveness only |
+| `GET /v1/zones` | any | `{"zones": [{"zone", "provider", "full", "tenant"}]}`: the key's zones (operator: every assignable zone; `tenant` only for operator keys) |
 | `GET /v1/zones/{zone}/records?name=&type=` | any | the records; those another module wrote carry `owned_by` |
-| `GET /v1/zones/{zone}/propagation?name=&type=` | any | what the zone's name servers answer |
-| `POST /v1/zones/{zone}/changes` `{"remove", "add", "dry_run"}` | write | remove exact records and add others as one change; refused as a whole (409 `stale`) if a record to remove is no longer there |
+| `GET /v1/zones/{zone}/propagation?name=&type=` | any | what the zone's name servers answer, compared with the DNS host |
+| `POST /v1/zones/{zone}/changes` `{"remove", "add", "dry_run"}` | write | remove exact records and add others as one change; refused as a whole with 409 `stale` if a record to remove is no longer there |
 | `POST /v1/zones/{zone}/records` `{"records", "dry_run"}` | write | add records; never removes any |
 | `PUT /v1/zones/{zone}/rrsets` `{"records", "dry_run"}` | write | make the given records the only ones of each name and type |
 | `DELETE /v1/zones/{zone}/records` `{"records", "dry_run"}` | write | remove the matching records (`name` required; a `type`, `ttl` or `data` left out matches anything) |
 | `GET`, `POST /v1/tenants` | operator | list, add (`{"name"}`) |
 | `GET`, `PATCH`, `DELETE /v1/tenants/{id}` | operator | read, change (`{"name", "enabled"}`), remove with its keys |
 | `PUT`, `DELETE /v1/tenants/{id}/zones/{zone}` | operator | assign, unassign a zone |
-| `GET`, `POST /v1/tenants/{id}/keys` | operator | list, make a tenant key (`{"scope", "label", "allowlist", "expires"}`); the response has the key |
+| `GET`, `POST /v1/tenants/{id}/keys` | operator | list, make a tenant key (`{"scope", "label", "allowlist", "expires", "restrict"}`); only the response holds the key |
 | `DELETE /v1/tenants/{id}/keys/{key id}` | operator | revoke |
-| `POST /v1/acme/present`, `POST /v1/acme/cleanup` `{"fqdn", "value"}` | write | add, remove an `_acme-challenge` TXT record; HTTP Basic authentication with the key as the password is accepted here |
+| `POST /v1/acme/present`, `/v1/acme/cleanup` | write | see [ACME endpoints](#acme-endpoints) |
 
-Making a tenant key through the API, `"restrict": "acme"` or `{"names": [...], "types": [...]}`
-limits it the same way.
+A restricted operator key (`restrict`) reaches the zones but not the tenant and key endpoints.
 
-A record is `{"name", "type", "ttl", "data"}`, as in dnshelper: `name` relative to the zone (`@` for
-the apex), `data` in zone-file form without quotes (TXT is one plain string; MX is `"10
-mail.example.com."`), `ttl` optional. At most 100 records per request. dnshelper refuses invalid
-results (a CNAME beside other records) and never changes the apex NS and SOA records.
+**Records** use dnshelper's shape, `{"name", "type", "ttl", "data"}`: `name` relative to the zone
+(`@` for the apex), `data` in zone-file form without quotes (TXT is one plain string of any
+length; MX is `"10 mail.example.com."`; SRV is `"priority weight port target"`), `ttl` optional.
+At most 100 records per request. dnshelper refuses invalid results and never changes the apex NS
+and SOA records; which types and values work depends on the DNS host (dnshelper's README,
+"Providers").
 
-A change answers `{"zone", "dry_run", "changes": {"add", "remove"}, "warnings", "records"}`. To edit
-a record, remove the old value and add the new one in one `changes` request. With `"dry_run":
-true` nothing is written.
+**A change** answers `{"zone", "dry_run", "changes": {"add", "remove"}, "warnings", "records"}`.
+To edit a record, remove the old value and add the new one in one `changes` request: if someone
+changed it meanwhile, the request is refused with `stale` instead of adding a second record. With
+`"dry_run": true` nothing is written, and the answer is the same.
 
 **Records written by other modules.** Some records were written by an NS8 module, for example the
-mail server's MX or DKIM record. A tenant may change them, but the module may write them again.
-A change that removes one carries a warning:
+mail server's MX or DKIM record; `GET .../records` marks them `"owned_by": ["mail1"]`. A tenant
+may change them, but the module may write them again, so a change that removes one carries
 
     "warnings": [{"code": "owned_by_module", "record": {...}, "modules": ["mail1"], "message": "..."}]
 
-and `GET .../records` marks such records with `"owned_by": ["mail1"]`. A portal should send a dry
-run first, show the warnings, and send the change only when the user confirms.
+A portal should send a dry run first, show the warnings, and apply only when the user confirms.
 
-A tenant key gets 404 for a zone it does not own. Too many requests give 429 with `Retry-After`.
-Calls that reach the DNS host can take as long as the host does (Hetzner: 8 to 15 s); allow 60 s.
+**Time.** Each call that reaches the DNS host is an NS8 task plus the host's own time: about 0.4 s
+for a read and 0.8 s for a change on the test node, and 8 to 15 s per call on Hetzner. Allow 60 s.
+Every call to dnshelper counts against the key's rate limit (a records read or a change counts
+twice).
 
     curl -H "Authorization: Bearer $KEY" https://dnsapi.example.com/v1/zones
     curl -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
@@ -128,83 +126,90 @@ Calls that reach the DNS host can take as long as the host does (Hetzner: 8 to 1
              "add": [{"name": "www", "type": "A", "data": "192.0.2.2"}], "dry_run": true}' \
         https://dnsapi.example.com/v1/zones/example.com/changes
 
-## ACME DNS-01 validation
+## ACME endpoints
 
-Systems that get certificates with the DNS-01 challenge, including ones the internet cannot reach,
-can create and remove their `_acme-challenge` TXT records through dnsapi. The zone must be public
-(the CA asks its name servers); the systems only need to reach the API.
+`POST /v1/acme/present` and `POST /v1/acme/cleanup` take `{"fqdn": "_acme-challenge.www.example.com.",
+"value": "<token>"}`: the protocol of lego's `httpreq` provider and acme.sh's `acmeproxy`
+(checked against their sources, see DESIGN.md). They accept HTTP Basic authentication with the
+key as the password and any user name, as those clients send it; nowhere else does.
 
-Set it up once:
+- The `fqdn` must start with the label `_acme-challenge`; the trailing dot is optional. The zone
+  is the longest of the key's zones that contains it.
+- `present` adds the TXT value with a TTL of 60 and keeps any other value at that name;
+  `cleanup` removes only that value. They run as any other change (write scope, `restrict`, rate
+  limit, audit line).
+- The answer is `{"fqdn", "value", "zone", "changes"}`: acme.sh needs the value echoed.
+- lego's `RAW` mode is not supported. A CNAME on `_acme-challenge` pointing to a name that does
+  not start with `_acme-challenge` is refused (lego sends the CNAME's target).
 
-1. On dnshelper's Access page, a rule for `module/dnsapi1` with the ACME preset on the zones the
-   certificates are for (or "API module (all records)" if the zone is also a tenant's).
-2. A tenant for those systems, with the zones:
+The user guide shows the lego, acme.sh and certbot setups.
 
-       api-cli run module/dnsapi1/add-tenant --data '{"name": "Internal hosts"}'
-       api-cli run module/dnsapi1/assign-zone --data '{"tenant": "t1a2b3c4d", "zone": "example.com"}'
+## How it fits together
 
-3. One key per system, limited to ACME records and to its address:
+- **Two images.** `dnsapi` is the NS8 module (actions, systemd unit, UI); `dnsapi-server`
+  (`server/Containerfile`) is the API service, Python standard library only. They are published
+  together with the same tag.
+- **The service** runs rootless with `--network=host`, because it calls NS8 tasks on the
+  api-server at `cluster-leader:9311`, which is `127.0.0.1` on the leader node. It listens on
+  `127.0.0.1:${TCP_PORT}`, and Traefik routes the API host name to it. It runs as the module's
+  uid with the state directory mounted read-only, and writes only `state/usage/`.
+- **NS8 tasks** are three HTTP calls (log in, post the task, read its status), done in
+  `server/dnsapi_server/backend.py` with the credentials from `agent.env`. A task runs as
+  `module/dnsapi1`, so dnshelper's policy applies to it.
+- **Only actions write state.** The operator endpoints that change tenants, assignments and keys
+  call this module's own actions through its `selfadm` role, granted in
+  `create-module/10grants` (and `update-module.d/10grants`). A key's secret is made by the caller
+  and only its hash reaches an action, so no secret is ever kept in Redis.
+- **State** (`pypkg/dnsapi/state.py`): `settings.json`, `tenants.json`, `keys.json`, all 0600,
+  replaced atomically under a lock; `runtime.json`, written by `bin/discover-runtime` (the
+  dnshelper instance, Traefik's `PROXIES_DEPTH`); `usage/last-used.json`, written by the service.
+  The service rereads a file when its modification time changes.
+- **The client address** is the last `X-Forwarded-For` entry, or `PROXIES_DEPTH` entries left of
+  it when Traefik has trusted proxies. Traefik replaces a header a client sends itself.
+- **Events**: `service-dnshelper-changed`, `module-added` and `module-removed` rerun discovery;
+  the first also drops assignments of zones dnsapi may no longer write in.
+- **Route**: `configure-module` calls Traefik's `set-route` with the instance name `MODULE_ID`,
+  before saving anything; ns8-traefik removes the route with the module.
 
-       runagent -m dnsapi1 create-key --owner t1a2b3c4d --scope write --restrict acme \
-           --allowlist 10.0.0.5 --label "host1 certificates"
+## Using dnshelper
 
-**lego**, and so Traefik and Caddy, which use it, with the `httpreq` provider:
+dnsapi is an ordinary dnshelper consumer
+([its README, "Using dnshelper from another module"](https://github.com/danb35/ns8-dnshelper#using-dnshelper-from-another-module)):
 
-    HTTPREQ_ENDPOINT=https://dnsapi.example.com/v1/acme HTTPREQ_USERNAME=acme HTTPREQ_PASSWORD=<key> \
-        HTTPREQ_HTTP_TIMEOUT=90 lego --dns httpreq -d host1.example.com -m admin@example.com run
+- the grant is `dnshelper@any:dnswriter` (not `@cluster`: DESIGN.md, Module plumbing, says why);
+- it finds dnshelper with `list_service_providers`, the first by install order when there are
+  several;
+- it calls `list-zones` (cached 30 s), `get-records`, `list-owners`,
+  `check-propagation`, and for changes `apply-changes`, `append-records`, `set-records` (mode
+  `rrset`) and `delete-records`, always with `on_behalf_of="<tenant>:<key id>"`, so dnshelper's
+  history names the tenant and records no owner;
+- a zone can be assigned when its rule for dnsapi has `access: "write"`; `full` says whether it
+  covers every name and type.
 
-`HTTPREQ_HTTP_TIMEOUT` (seconds, default 30) leaves room for slow DNS hosts. lego's `RAW` mode is
-not supported.
+## Backup and restore
 
-**acme.sh**, with the `acmeproxy` hook:
-
-    export ACMEPROXY_ENDPOINT=https://dnsapi.example.com/v1/acme ACMEPROXY_USERNAME=acme ACMEPROXY_PASSWORD=<key>
-    acme.sh --issue --dns dns_acmeproxy -d host1.example.com
-
-**certbot** has no such plugin; use hooks that call the same endpoints:
-
-    certbot certonly --manual --preferred-challenges dns \
-        --manual-auth-hook "/usr/local/bin/dnsapi-hook present" \
-        --manual-cleanup-hook "/usr/local/bin/dnsapi-hook cleanup" \
-        -d host1.example.com
-
-with `/usr/local/bin/dnsapi-hook`, and the key in `DNSAPI_KEY`:
-
-    #!/bin/sh
-    # certbot sets CERTBOT_DOMAIN and CERTBOT_VALIDATION; $1 is present or cleanup.
-    action=$1
-    curl -sf -H "Authorization: Bearer $DNSAPI_KEY" -H "Content-Type: application/json" \
-        -d "{\"fqdn\": \"_acme-challenge.$CERTBOT_DOMAIN.\", \"value\": \"$CERTBOT_VALIDATION\"}" \
-        "https://dnsapi.example.com/v1/acme/$action" >/dev/null || exit 1
-    [ "$action" = present ] && sleep 30
-    exit 0
-
-The `fqdn` must start with `_acme-challenge.`; the zone is the longest of the key's zones that
-contains it. `present` adds the value with a TTL of 60 seconds (raised by DNS hosts with a higher
-minimum) and keeps any other value, so a wildcard and its base name can be validated together.
-`cleanup` removes only that value. A CNAME on `_acme-challenge` that points outside the key's zones
-is not followed.
+`etc/state-include.conf` backs up `settings.json`, `tenants.json` and `keys.json`.
+`restore-module/50call-configure-module` runs `configure-module` with no input, which keeps the
+restored settings and recreates the route. Restored keys keep working.
 
 ## Development
 
-- `server/`: the API service (Python, standard library only) and its `Containerfile`.
-  `build-images.sh` builds it as the `dnsapi-server` image and runs `server/tests` inside it. Run
-  the tests locally with `cd server && python3 -m unittest discover -s tests`.
-- `imageroot/`: the NS8 actions and the systemd unit; `ui/`: the admin UI.
+- `server/`: the API service and its tests. `cd server && python3 -m unittest discover -s tests`
+  runs them; `build-images.sh` runs them inside the built image too.
+- `imageroot/`: actions, `bin/`, events, `pypkg/dnsapi/`, the systemd unit and the update hooks.
+- `ui/`: the admin UI (Vue 2, ns8-ui-lib), translated with
+  [Weblate](https://hosted.weblate.org/projects/ns8/).
 
-## Uninstall
+## Testing
 
-To uninstall the instance:
+`tests/*.robot` is what CI runs on throwaway NS8 nodes (Rocky 9 and Debian 13), which have no
+dnshelper: it covers the route, the settings, keys made from the shell and through the API,
+tenants through the module's own actions, isolation, restricted keys, Basic authentication on
+the ACME endpoints, revocation, and the 503 while dnshelper is missing. To run it on your own
+node, see [Running tests
+locally](https://github.com/NethServer/ns8-github-actions/blob/v1/README.md#running-tests-locally).
+What was tested against real zones on a node is recorded in DESIGN.md, build order.
 
-    remove-module --no-preserve dnsapi1
+## Author
 
-## Running tests locally
-
-This module uses the NS8 standard testing infrastructure. For instructions on how to run the test
-suite locally, refer to the [Running tests
-locally](https://github.com/NethServer/ns8-github-actions/blob/v1/README.md#running-tests-locally)
-section of the ns8-github-actions README.
-
-## UI translation
-
-Translated with [Weblate](https://hosted.weblate.org/projects/ns8/).
+[Dan Brown](https://community.nethserver.org/u/dan)

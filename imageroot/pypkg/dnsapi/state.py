@@ -144,8 +144,10 @@ def fail(field, error, value="", message=""):
 
 def caller():
     """Who runs the task: "module/dnsapi1" when the API service calls its own
-    action, otherwise the NS8 user (a cluster administrator)."""
-    return os.environ.get("AGENT_TASK_USER") or "shell"
+    action, otherwise the NS8 user (a cluster administrator). Empty when root
+    on the node runs it: api-cli, or bin/create-key through runagent (seen on
+    the test node, 2026-11-21)."""
+    return os.environ.get("AGENT_TASK_USER") or "root"
 
 
 def audit(action, **fields):

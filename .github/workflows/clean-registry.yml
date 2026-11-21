@@ -19,7 +19,7 @@ permissions:
   packages: write
 
 env:
-  IMAGES: dnsapi
+  IMAGES: dnsapi dnsapi-server
 
 jobs:
   delete_images:

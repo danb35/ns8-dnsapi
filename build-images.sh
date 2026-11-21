@@ -1,7 +1,8 @@
 #!/bin/bash
 
 #
-# Copyright (C) 2023 Nethesis S.r.l.
+# Copyright (C) 2023 Nethesis S.r.l. (ns8-kickstart template)
+# Copyright (C) 2026 Dan Brown
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 
@@ -38,13 +39,29 @@ buildah run \
 # Add imageroot directory to the container image
 buildah add "${container}" imageroot /imageroot
 buildah add "${container}" ui/dist /ui
+
+# The API service image (server/Containerfile). It is published beside the
+# module image under the same tag, so a branch build runs its own service.
+imagetag=$(printf '%s' "${IMAGETAG:-latest}" | tr '/' '-')
+serverimage="${repobase}/${reponame}-server"
+buildah build --tag "${serverimage}" -f server/Containerfile server
+images+=("${serverimage}")
+
+# Run the service's unit tests inside the image just built. --pull=never:
+# test this build, not an image of the same name pulled from the registry.
+echo "Running the server unit tests..."
+testcontainer=$(buildah from --pull=never "${serverimage}")
+buildah copy "${testcontainer}" server/tests /tmp/tests
+buildah run --workingdir=/tmp/tests "${testcontainer}" -- python3 -m unittest discover
+buildah rm "${testcontainer}" >/dev/null
+
 # Setup the entrypoint, ask to reserve one TCP port with the label and set a rootless container
 buildah config --entrypoint=/ \
     --label="org.nethserver.authorizations=dnshelper@any:dnswriter traefik@node:routeadm" \
     --label="org.nethserver.tcp-ports-demand=1" \
     --label="org.nethserver.rootfull=0" \
     --label="org.nethserver.min-core=3.23.0" \
-    --label="org.nethserver.images=docker.io/jmalloc/echo-server:0.3.6" \
+    --label="org.nethserver.images=${serverimage}:${imagetag}" \
     "${container}"
 # Commit the image
 buildah commit "${container}" "${repobase}/${reponame}"

@@ -2,7 +2,50 @@
     "$schema": "http://json-schema.org/draft-07/schema#",
     "title": "configure-module input",
     "$id": "http://schema.nethserver.org/dnsapi/configure-module-input.json",
-    "description": "Configure dnsapi",
-    "examples": [],
-    "type": "object"
+    "description": "Configure dnsapi: the host name the API is published on, its certificate and HTTP redirect, and the client addresses Traefik lets through. An omitted field keeps its current value; host is required until it has been set once.",
+    "examples": [
+        {
+            "host": "dnsapi.example.com",
+            "lets_encrypt": true,
+            "http2https": true,
+            "ip_allowlist": ["203.0.113.10", "198.51.100.0/24"]
+        },
+        {
+            "ip_allowlist": []
+        }
+    ],
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+        "host": {
+            "type": "string",
+            "format": "hostname",
+            "pattern": "\\.",
+            "maxLength": 253,
+            "title": "API host name",
+            "description": "A fully qualified host name that Traefik routes to the API. It must not be used by another route."
+        },
+        "lets_encrypt": {
+            "type": "boolean",
+            "title": "Let's Encrypt certificate",
+            "description": "Request a Let's Encrypt certificate for the host name. The request must succeed for the action to succeed. Default false."
+        },
+        "http2https": {
+            "type": "boolean",
+            "title": "HTTP to HTTPS redirection",
+            "description": "Redirect plain HTTP requests to HTTPS. Default true."
+        },
+        "ip_allowlist": {
+            "type": "array",
+            "title": "Allowed client addresses",
+            "description": "IP addresses or CIDR networks that Traefik lets reach the API; every other client gets 403 from Traefik. An empty list allows every address. Default empty.",
+            "uniqueItems": true,
+            "maxItems": 100,
+            "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+            }
+        }
+    }
 }

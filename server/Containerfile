@@ -1,0 +1,26 @@
+#
+# Copyright (C) 2026 Dan Brown
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# The dnsapi API service. build-images.sh builds it and publishes it as
+# ghcr.io/<owner>/dnsapi-server beside the module image, with the same tag;
+# imageroot/systemd/user/dnsapi.service runs it.
+#
+
+FROM docker.io/library/python:3.14.10-slim-trixie
+
+RUN groupadd --gid 10001 dnsapi \
+    && useradd --uid 10001 --gid dnsapi --no-create-home --home-dir /nonexistent dnsapi
+
+COPY dnsapi_server /opt/dnsapi/dnsapi_server
+
+ENV PYTHONPATH=/opt/dnsapi \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+USER dnsapi:dnsapi
+WORKDIR /nonexistent
+EXPOSE 8080
+
+ENTRYPOINT ["python3", "-m", "dnsapi_server"]
+CMD ["--host", "0.0.0.0", "--port", "8080"]

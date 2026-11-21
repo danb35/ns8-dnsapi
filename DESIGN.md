@@ -10,8 +10,9 @@ The dnshelper side is in
 "Delegated access for an API module". Items marked **VERIFY** were not confirmed from the sources
 or on a node.
 
-Status: design only; nothing of this module is built yet. dnshelper's side, phase 1, is released
-in dnshelper 0.7.0 (2026-11-21), which this module needs at least.
+Status: build order step 1 is done (the service, its Traefik route and `GET /v1/status`); the rest
+is design. dnshelper's side, phase 1, is released in dnshelper 0.7.0 (2026-11-21), which this
+module needs at least.
 
 Origin: forum request, community.nethserver.org topic 28774, posts 32-37 (2026-11-18/20).
 
@@ -184,8 +185,10 @@ Phase 2 adds `POST /v1/zones` (add a domain with a provider and credentials) and
   `revoke-key`, `list-keys`.
 - Events: on dnshelper's `service-dnshelper-changed`, drop assignments of zones dnshelper no longer
   manages, or that dnsapi may no longer write. Log it; never fail.
-- `destroy-module`: remove the Traefik route. dnshelper's own `module-removed` handling drops the
-  module from its record owner index.
+- `destroy-module`: nothing to do for the route. Its instance name is `MODULE_ID`, and ns8-traefik's
+  own `module-removed` handling deletes the routes whose name starts with it (the kickstart
+  template relies on the same). dnshelper's own `module-removed` handling drops the module from its
+  record owner index.
 
 ## Admin UI (NS8, cluster administrators)
 
@@ -199,7 +202,16 @@ This is not the customer control panel: only cluster administrators can reach it
 
 ## Build order
 
-1. Scaffold from ns8-kickstart; route via Traefik; `GET /v1/status`.
+1. Scaffold from ns8-kickstart; route via Traefik; `GET /v1/status`. **Done** (2026-11-21):
+   - `server/`: the service, Python standard library only (`http.server`, one thread per
+     request), in its own image `dnsapi-server`, built and published beside the module image with
+     the same tag and unit-tested inside it by `build-images.sh`. Non-root user, `--read-only`
+     container, published on `127.0.0.1:${TCP_PORT}`.
+   - `configure-module`: `host`, `lets_encrypt`, `http2https`, `ip_allowlist`, kept in
+     `state/settings.json` (backed up). It calls `set-route` before saving, with
+     `lets_encrypt_check` when a certificate is requested, so a refused setting changes nothing.
+     An omitted field keeps its value. `restore-module` re-runs it to recreate the route.
+   - The kickstart smarthost example is removed: dnsapi sends no mail.
 2. Tenants, keys, authentication, rate limits; the read endpoints.
 3. Write endpoints over `apply-changes`, `append-records`, `set-records`, `delete-records`
    (dnshelper's phase 1: released in 0.7.0).

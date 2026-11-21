@@ -34,9 +34,11 @@ already applied (the same as in ns8-dnshelper and ns8-automx):
   run by hand: `gh workflow run clean-registry.yml -f tag=<branch with / as ->`.
 - `test-ui-build-renovate.yml` targets `master`, the default branch here.
 
-The ghcr package must be pullable anonymously, or the test fails at "cannot resolve
-ghcr.io/danb35/dnsapi:<branch>" (403). After the first publish of the `dnsapi` image, check the
-package's visibility and set it to public if needed. `publish-images.yml` skips the very first run
+Two images are published: `dnsapi` (the module) and `dnsapi-server` (the API service, from
+`server/Containerfile`); `clean-registry.yml` lists both. Both ghcr packages must be pullable
+anonymously, or the test fails at "cannot resolve ghcr.io/danb35/<image>:<branch>" (403), or the
+node can't pull the service image. After a new image's first publish, check the package's
+visibility and set it to public if needed. `publish-images.yml` skips the very first run
 (`if: github.run_number > 1`); that is normal.
 
 How the tests run: `test-module.yml` starts after "Publish images" succeeds (`workflow_run`), boots

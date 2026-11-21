@@ -212,6 +212,11 @@ This is not the customer control panel: only cluster administrators can reach it
      `lets_encrypt_check` when a certificate is requested, so a refused setting changes nothing.
      An omitted field keeps its value. `restore-module` re-runs it to recreate the route.
    - The kickstart smarthost example is removed: dnsapi sends no mail.
+   - Tested on the test node (core 3.25.1, ns8-traefik 4.2.5): route, HTTPS redirect, JSON 404,
+     allowlist on and off, `update-module` restart keeping the settings. Finding: when the
+     allowlist changes twice within a second, Traefik can serve the previous one for about 2 s
+     after the second `set-route` returns (seen in 1 of 3 tries). ns8-traefik's reload, not ours,
+     and harmless for an admin setting, but a test that changes the allowlist must allow for it.
 2. Tenants, keys, authentication, rate limits; the read endpoints.
 3. Write endpoints over `apply-changes`, `append-records`, `set-records`, `delete-records`
    (dnshelper's phase 1: released in 0.7.0).

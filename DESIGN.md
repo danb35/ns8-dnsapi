@@ -10,9 +10,10 @@ The dnshelper side is in
 "Delegated access for an API module". Items marked **VERIFY** were not confirmed from the sources
 or on a node.
 
-Status: build order steps 1 to 7 are done (the service and its route; tenants, keys,
+Status: build order steps 1 to 8 are done (the service and its route; tenants, keys,
 authentication, rate limits and the read endpoints; the write endpoints; ACME DNS-01; the admin
-UI and the OpenAPI document; the full node test; the API host name in DNS). dnshelper's side, phase 1, is released in dnshelper 0.7.0 (2026-11-21), which this
+UI and the OpenAPI document; the full node test; the API host name in DNS; the hardening from the
+security review). dnshelper's side, phase 1, is released in dnshelper 0.7.0 (2026-11-21), which this
 module needs at least.
 
 Origin: forum request, community.nethserver.org topic 28774, posts 32-37 (2026-11-18/20). The
@@ -246,8 +247,8 @@ manages. `configure-module` then publishes it itself, so that the Let's Encrypt 
   `https`) with 403 `https_required`, whatever the setting, and logs the key id it carried so the
   administrator can revoke a key that went over the network unencrypted. Requests without the
   header come straight from the node (the systemd start check, local scripts) and are accepted.
-  **VERIFY** on a node that Traefik replaces a client's `X-Forwarded-Proto`, as it does
-  `X-Forwarded-For`. `http2https` cannot prevent the first cleartext request: the redirect comes
+  Verified on the test node (2026-11-21): Traefik replaces a client's `X-Forwarded-Proto`, as
+  it does `X-Forwarded-For`. `http2https` cannot prevent the first cleartext request: the redirect comes
   after the key was sent. Clients must use the `https://` URL.
 - **Concurrency limits** (decision 2026-11-21, security review): the service started a thread per
   connection without limit, and a request waits up to 150 s for a DNS host. Now at most 64
@@ -634,6 +635,31 @@ wraps the task events in one promise, as theirs do):
      itself, which need the node's host name to resolve publicly and port 80 to reach the node.
 8. Hardening from the security review: the broker (the service holds no NS8 credentials), HTTPS
    only, concurrency limits, the IPv6 /64 throttle; the service's files moved to `state/api/`.
+   **Done** (2026-11-21):
+   - Unit tests: 67, including the broker's allowlist over its socket (allowed: dnshelper's reads
+     and its writes with `on_behalf_of`, the tenant and key actions; refused: writes without
+     `on_behalf_of`, `set-policy`, `add-zone`, `has-zone`, `configure-module`, operator keys,
+     Traefik, the node), the socket's mode 0600, `https_required`, the per-key, task and
+     connection caps, and the /64 throttle.
+   - Test node (Rocky 9, SELinux enforcing): `update-module` moved the four files into
+     `state/api/` and enabled the broker. Inside the API container: no `agent.env`, no `REDIS_`
+     variable, all capability sets empty, `NoNewPrivs` 1, mounts `state/api` (ro), `state/usage`
+     and the broker's directory only; the api-server refuses it (401). From inside it, the
+     broker ran `list-zones` and refused `set-policy`, a write without `on_behalf_of`,
+     `configure-module`, an operator key and Traefik's `set-route`. Through Traefik: adding a
+     tenant (through the broker) 201, the zones 200; plain HTTP 403 `https_required`, also with
+     a forged `X-Forwarded-Proto: https`, which Traefik replaces (the VERIFY item above), and the
+     key id logged; `/v1/status` over HTTP still 200.
+   - Found on the node and fixed: the first broker, a host process under `runagent`, could not be
+     reached from the container (SELinux; see The broker), so it is a container; a file moved
+     into `state/api/` by renaming kept a private SELinux label from an earlier mount and the
+     container could not read it, so the moves write new files.
+   - Restore: a restore runs the image recorded in the backup (`IMAGE_URL`), here `dnsapi:latest`,
+     the build before this step, so it came back with the old layout and old code; updating it
+     then moved its files and its restored tenants were served. `restore-module/40move_api`
+     covers restoring an old backup once `latest` is this code.
+   - Not tested on a node: the concurrency caps and the /64 throttle (unit tests only; the node
+     has no working IPv6).
 9. Phase 2 (delegated zones), then phase 3 (PowerDNS hosting), as needed.
 
 ## Open questions

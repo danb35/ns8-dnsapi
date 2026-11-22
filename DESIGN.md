@@ -658,6 +658,16 @@ wraps the task events in one promise, as theirs do):
      the build before this step, so it came back with the old layout and old code; updating it
      then moved its files and its restored tenants were served. `restore-module/40move_api`
      covers restoring an old backup once `latest` is this code.
+   - Debian 13 node (node 2, AppArmor enabled, its own Traefik, dnshelper on node 3): an instance
+     installed from master with a tenant and an operator key, then `update-module` to this
+     branch: the four files moved into `state/api/`, both units enabled and active, the key made
+     before the update still worked. Inside the API container the same as on Rocky (no
+     `agent.env`, no `REDIS_` variable, empty capability sets, `NoNewPrivs` 1, the same three
+     mounts); from inside it the broker ran `list-zones` on dnshelper across nodes and refused
+     `set-policy`, `configure-module` and Traefik, and the api-server answered 401. Through
+     node 2's Traefik: a tenant added through the broker 201, the zones 200, plain HTTP 403
+     `https_required` (also with a forged `X-Forwarded-Proto`), `/v1/status` over HTTP 200. Podman
+     on that node applies no AppArmor profile to either container, so the socket needs no rule.
    - Not tested on a node: the concurrency caps and the /64 throttle (unit tests only; the node
      has no working IPv6).
 9. Phase 2 (delegated zones), then phase 3 (PowerDNS hosting), as needed.

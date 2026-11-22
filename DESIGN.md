@@ -299,7 +299,11 @@ the hosts are not. NS8's own Let's Encrypt certificates (Traefik) are unrelated 
   above), `revoke-key`, `list-keys`. Operator keys are made only by a cluster administrator; the
   API has no endpoint for them.
 - Events: on dnshelper's `service-dnshelper-changed`, drop assignments of zones dnshelper no longer
-  manages, or that dnsapi may no longer write. Log it; never fail.
+  manages (`has-zone` says `managed: false`). Log it; never fail. Changed (2026-11-21, step 6): a
+  zone dnsapi may merely not write in right now is kept. After a restore the module has a new id
+  and dnshelper's rules still name the old one, so every zone looks unwritable until the
+  administrator updates them; the earlier rule (drop what is not writable) emptied every tenant
+  in that window, as shown on the test node. The API refuses an unwritable zone anyway.
 - `destroy-module`: nothing to do for the route. Its instance name is `MODULE_ID`, and ns8-traefik's
   own `module-removed` handling deletes the routes whose name starts with it (the kickstart
   template relies on the same). dnshelper's own `module-removed` handling drops the module from its
@@ -459,7 +463,45 @@ wraps the task events in one promise, as theirs do):
      is now recorded with the change).
 6. Node test: two tenants, isolation (a tenant key cannot read or write the other tenant's zone),
    a zone dnshelper's policy does not grant, rate limits, key revocation; a certificate from Let's
-   Encrypt's staging CA with lego against a zone with only the ACME rule.
+   Encrypt's staging CA with lego against a zone with only the ACME rule. **Done** (2026-11-21),
+   on the master image (`8296e09`) on the test node, through Traefik, with temporary dnshelper
+   rules for the test instance (full on `example.com`, the ACME preset on `2v6.in`), removed
+   afterwards:
+   - Tenants A (`example.com`) and B (`2v6.in`): the zone refused to a second tenant (409
+     `zone_assigned`) and an ungranted zone (`desec.2v6.in`) refused (409 `zone_not_assignable`);
+     each key's `GET /v1/zones` lists only its own zones, with `full` true and false.
+   - Isolation, all 404: A reading, writing and ACME on B's zone; B reading and writing A's; any
+     key on the ungranted zone; A on the operator endpoints. B's ACME-restricted key refused an A
+     record (403 `outside_restriction`); B's unrestricted key was refused by dnshelper (403
+     `not_permitted`); B's reads list only `_acme-challenge` records. A read operator key cannot
+     add a tenant.
+   - Rate limit 4 per minute: the first records read 200, then 429 with `Retry-After: 59`; another
+     key of the tenant unaffected. Revoking a key through the API: 204, then 401 for it, 200 for
+     the tenant's other key. Ten failed authentications from one address: 429 with `Retry-After:
+     60` for a valid key from it too, ten journal lines.
+   - ACME, both against Let's Encrypt's staging CA, with B's ACME-restricted key on the zone with
+     only the ACME rule: lego 5.6.0 (`httpreq`, 40 s) and acme.sh 3.1.6 (`acmeproxy`, which
+     needs the value echoed, 47 s) each got a certificate; one add and one delete audit line per
+     challenge; no record left.
+   - Backup and restore over the instance: tenants, assignments, keys and settings came back in
+     the new instance, its keys worked and the revoked one stayed revoked; but no zone was
+     reachable until dnshelper's rules were changed to the new instance name (user guide, Backup
+     and restore). That showed the prune hazard fixed under Module plumbing, Events: the old
+     prune emptied both tenants in that state, the new one keeps them.
+   - Writes on `example.com` (ns8-powerdns, on node 2). Node 2 was offline during the first pass,
+     and every call to the zone ended in 502 `upstream_error` after dnshelper's provider timeout,
+     which is the right answer for a DNS host that does not answer. Rerun once node 2 was back,
+     with the tenants and a full rule for the restored instance: 17 of 17 passed. Add; an edit as
+     a dry run and for real; the same edit again refused (409 `stale`); an RRset replaced; a
+     CNAME beside A records (409 `conflict`); the apex NS (403 `forbidden`); a TXT value with
+     spaces kept; a read key refused (403); the other tenant's key refused (404) for writes and
+     deletes; a module-written record shown with `owned_by` and its deletion warned about, as a
+     dry run and for real; an operator key deleting the tenant's records. dnshelper logged every
+     write with `on_behalf_of="<tenant>:<key id>"`; a write took 0.8 s, a read 0.42 s; the zone
+     ended with its SOA and NS only.
+   - Not covered: a Let's Encrypt certificate for the API's own host name (no public DNS record
+     for the test host name), and `owned_by` for a record another module wrote through its own
+     rule (only a record dnsapi wrote without `on_behalf_of`).
 7. Phase 2 (delegated zones), then phase 3 (PowerDNS hosting), as needed.
 
 ## Open questions

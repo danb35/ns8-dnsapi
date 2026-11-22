@@ -107,8 +107,9 @@ From the command line:
 
 and `update-tenant` (`{"id": "t1a2b3c4d", "enabled": false}`), `unassign-zone`, `remove-tenant`.
 
-If you remove dnshelper's rule for a zone, dnsapi drops it from its tenant the next time
-dnshelper's zones change.
+If you remove dnshelper's rule for a zone, the tenant keeps it, but nothing reaches it through the
+API until a rule is back. If you remove the zone from dnshelper, dnsapi takes it from its tenant
+the next time dnshelper's zones change.
 
 ## Keys
 
@@ -245,8 +246,14 @@ its Records page shows it in the zone's history.
 ## Backup and restore
 
 The settings, the tenants and their zones, and the keys are backed up with the module. Restored
-keys keep working, and the restore publishes the API's route again. The "last used" times and the
-Activity page start empty.
+keys keep working, revoked keys stay revoked, and the restore publishes the API's route again. The
+"last used" times and the Activity page start empty.
+
+**After a restore, update dnshelper's rules.** The restored module gets a new name (`dnsapi1`
+becomes, for example, `dnsapi2`), and dnshelper's rules still name the old one, so the API reaches
+no zone until you change them: on dnshelper's Access page, change each rule for
+`module/dnsapi1` to the new name. The Status page says that dnsapi may not use any zone, with the
+name to use. The tenants keep their zones meanwhile.
 
 ## When something goes wrong
 

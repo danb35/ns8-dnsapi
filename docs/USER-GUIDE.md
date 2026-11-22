@@ -5,7 +5,7 @@ needs before it can do anything, how to publish the API, how to decide which zon
 out, how to make keys for a billing portal, for customers and for systems that need
 certificates, and what to do when something goes wrong. Developers who write a client for the
 API, or who want to know how dnsapi is built, should read the [main README](../README.md)
-instead.
+instead. What data dnsapi keeps, and where it sends it, is in [TERMS.md](../TERMS.md).
 
 Everything here can be done from the module's pages in the cluster admin UI (Status, Tenants,
 Keys, Activity, Settings). The command-line equivalent (`api-cli`, `runagent` on the node) follows
@@ -43,14 +43,19 @@ customer (tenant) owns which zone, and what each key may do.
 - **dnshelper 0.7.0 or later**, with the zones you want to manage added to it. Older releases do
   not tell dnsapi how much it may change, and dnsapi then offers no zones.
 - **A host name for the API**, such as `dnsapi.example.com`, with a DNS record pointing to the
-  node. It must not be used by another application on the node.
+  node; when the name is in a zone dnshelper manages, dnsapi can add the record itself (see
+  [below](#publishing-the-api)). It must not be used by another application on the node.
 - To get a Let's Encrypt certificate for that name, port 80 of the node must be reachable from
   the internet.
 
 ## Publishing the API
 
 On the **Settings** page, set the host name, and optionally the certificate, the addresses
-allowed to connect and the rate limit. From the command line:
+allowed to connect and the rate limit.
+
+![The Settings page, with the host name added to DNS](images/settings.png)
+
+From the command line:
 
     api-cli run module/dnsapi1/configure-module --data '{"host": "dnsapi.example.com", "lets_encrypt": true}'
 
@@ -70,6 +75,8 @@ API's address. Check that it answers:
     curl https://dnsapi.example.com/v1/status
 
 which answers `{"status": "ok"}`.
+
+![The Status page](images/status.png)
 
 **The host name's DNS record.** When the host name is in a zone dnshelper manages, dnsapi adds
 the record itself, before requesting the certificate: a CNAME from the host name to this node's
@@ -119,6 +126,10 @@ it: a disabled tenant's keys are refused until you enable it again. **Remove** r
 with its keys. Taking a zone or removing a tenant never changes any record. Your portal can do
 all of this through the API with an operator key.
 
+![The Tenants page](images/tenants.png)
+
+![Editing a tenant: its zones, one of them with the ACME preset only ("Some records")](images/tenant-edit.png)
+
 From the command line:
 
     api-cli run module/dnsapi1/add-tenant --data '{"name": "Acme Ltd"}'
@@ -152,10 +163,16 @@ On the **Keys** page, **Create key** asks for:
 - the addresses it may be used from, one per line;
 - optionally, a day after which it stops working.
 
+![Creating a key for ACME challenges, usable from one address](images/key-create.png)
+
 The key is made in your browser and shown once, with a copy button: copy it into the portal or
 the system that uses it before closing the dialog. The page lists the keys, with when each was
 last used; **Revoke** stops a key at once. If a key may have leaked, revoke it and make another.
 **Show keys** on the Tenants page lists one tenant's keys.
+
+![The new key, shown once](images/key-created.png)
+
+![The Keys page](images/keys.png)
 
 From the command line, `create-key` prints the key:
 
@@ -218,7 +235,7 @@ Set it up once:
 
 Then configure the system's ACME client.
 
-**lego** (also used by Traefik and Caddy), with its `httpreq` provider:
+**lego** (also used by Traefik), with its `httpreq` provider:
 
     HTTPREQ_ENDPOINT=https://dnsapi.example.com/v1/acme HTTPREQ_USERNAME=acme HTTPREQ_PASSWORD=<key> \
         HTTPREQ_HTTP_TIMEOUT=90 lego --dns httpreq -d host1.example.com -m admin@example.com run
@@ -229,6 +246,40 @@ Then configure the system's ACME client.
 
     export ACMEPROXY_ENDPOINT=https://dnsapi.example.com/v1/acme ACMEPROXY_USERNAME=acme ACMEPROXY_PASSWORD=<key>
     acme.sh --issue --dns dns_acmeproxy -d host1.example.com
+
+**Caddy**, with the `acmeproxy` DNS module, which the standard Caddy download does not include.
+Build Caddy with it:
+
+    xcaddy build --with github.com/caddy-dns/acmeproxy
+
+or choose the `github.com/caddy-dns/acmeproxy` package on Caddy's download page
+(<https://caddyserver.com/download>). Then, in the Caddyfile, for one site:
+
+    host1.example.com {
+        tls {
+            dns acmeproxy https://dnsapi.example.com/v1/acme {
+                username acme
+                password {env.DNSAPI_KEY}
+            }
+        }
+        reverse_proxy localhost:8080
+    }
+
+or for every site, in the global options at the top of the Caddyfile:
+
+    {
+        email admin@example.com
+        acme_dns acmeproxy https://dnsapi.example.com/v1/acme {
+            username acme
+            password {env.DNSAPI_KEY}
+        }
+    }
+
+and start Caddy with the key in `DNSAPI_KEY` (for example `Environment=DNSAPI_KEY=...` in a
+systemd drop-in, or `EnvironmentFile=`), so that the key is not in the Caddyfile. This is also
+how Caddy gets a wildcard certificate (`*.example.com`), which needs DNS-01. If Caddy reports
+`timed out waiting for record to fully propagate`, add `resolvers 1.1.1.1` inside the `tls` block
+(see [below](#when-something-goes-wrong)).
 
 **certbot** has no such plugin; use a hook script:
 
@@ -258,16 +309,23 @@ key, its owner and the client's address, the records added and removed, and whet
 was made, refused or only a dry run), and tenants, zones and keys changed through the API or by
 an administrator. Reads are not listed.
 
+![The Activity page](images/activity.png)
+
 Every change, and every refused change, also writes one line to the module's log in the
 cluster's Logs page (or `journalctl` on the node), starting with `dnsapi audit:`. Keys never
 appear in either. dnshelper logs the same change with the tenant and key (`on_behalf_of`), and
 its Records page shows it in the zone's history.
 
+The Activity page is written by the API service itself. If you suspect the service was
+compromised, rely on the log lines and on dnshelper's history instead: the service cannot change
+those.
+
 ## Backup and restore
 
 The settings, the tenants and their zones, and the keys are backed up with the module. Restored
-keys keep working, revoked keys stay revoked, and the restore publishes the API's route again. The
-"last used" times and the Activity page start empty.
+keys keep working, and the restore publishes the API's route again. The keys come back as they
+were when the backup was taken: a key revoked since then works again, so revoke it again after
+the restore. The "last used" times and the Activity page start empty.
 
 **After a restore, update dnshelper's rules.** The restored module gets a new name (`dnsapi1`
 becomes, for example, `dnsapi2`), and dnshelper's rules still name the old one, so the API reaches
@@ -276,6 +334,10 @@ no zone until you change them: on dnshelper's Access page, change each rule for
 name to use. The tenants keep their zones meanwhile.
 
 ## When something goes wrong
+
+**A zone cannot be given to a tenant (`409 zone_not_assignable`)**: dnshelper has no write rule
+for dnsapi on it (see [Letting dnsapi use zones](#letting-dnsapi-use-zones)). `409
+zone_assigned`: another tenant has it.
 
 **`503 dnshelper_missing`**: dnshelper is not installed, or dnsapi has not found it yet. Install
 it; dnsapi notices within moments.
@@ -322,6 +384,9 @@ Encrypt, and its checks can fail where the client runs:
   `--dns.resolvers 1.1.1.1:53`;
 - with no working IPv6, the query to the zone's own name servers over IPv6 times out: for lego,
   `--dns.propagation.disable-ans` skips that check and relies on the resolver.
+
+For Caddy, `resolvers 1.1.1.1` inside the `tls` block does the same as lego's `--dns.resolvers`;
+Caddy's `propagation_timeout` and `propagation_delay` there set how long it waits.
 
 Both were needed on a test node, after which Let's Encrypt validated the record in under half a
 minute.

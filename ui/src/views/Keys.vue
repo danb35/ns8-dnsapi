@@ -116,7 +116,7 @@
                     $t("keys.expired")
                   }}</span>
                   <span v-else>{{
-                    row.expires ? formatTime(row.expires) : $t("keys.never")
+                    row.expires ? formatExpiry(row.expires) : $t("keys.never")
                   }}</span>
                 </cv-data-table-cell>
                 <cv-data-table-cell>{{
@@ -285,7 +285,21 @@ export default {
       return row.expires && new Date(row.expires) <= new Date();
     },
     formatTime(iso) {
-      return new Date(iso).toLocaleString();
+      return new Date(iso).toLocaleString(undefined, {
+        dateStyle: "short",
+        timeStyle: "short",
+      });
+    },
+    formatExpiry(iso) {
+      // The create dialog sets the start of a day in UTC: show that day, which
+      // in local time would be the evening before west of Greenwich.
+      if (/T00:00(:00)?(\.0+)?(Z|\+00:00)$/.test(iso)) {
+        return new Date(iso).toLocaleDateString(undefined, {
+          dateStyle: "medium",
+          timeZone: "UTC",
+        });
+      }
+      return this.formatTime(iso);
     },
     showRevoke(row) {
       this.current = row;

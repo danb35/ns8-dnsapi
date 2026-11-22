@@ -51,7 +51,7 @@
         <div v-if="!zoneOptions.length" class="mg-bottom-md helper">
           {{ $t("tenants.no_zones_to_assign") }}
         </div>
-        <div v-for="option in zoneOptions" :key="option.zone">
+        <div v-for="option in zoneOptions" :key="option.zone" class="zone-row">
           <NsCheckbox
             v-model="zones"
             :value="option.zone"
@@ -191,8 +191,17 @@ export default {
   max-width: 40rem;
 }
 
+// The tag beside its zone, not under it: the checkbox is a block form item.
+.zone-row {
+  display: flex;
+  align-items: center;
+}
+
+.zone-row ::v-deep .bx--form-item {
+  flex: 0 0 auto;
+}
+
 .zone-tag {
   margin-left: $spacing-03;
-  vertical-align: middle;
 }
 </style>

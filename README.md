@@ -186,13 +186,13 @@ history names the tenant.
   Traefik routes the API host name to it. It runs as the module's uid with no capabilities,
   mounts only `state/api/` read-only, `state/usage/` and the broker's socket directory, and
   **holds no NS8 credentials**.
-- **The broker** (`dnsapi-broker.service`, `bin/dnsapi-broker`, `pypkg/dnsapi/broker.py`) runs
-  on the host under `runagent` with the module's credentials, and runs only the tasks the API
-  needs, for the service, over a Unix socket: dnshelper's reads, its four writes (only with
-  `on_behalf_of`), and this module's tenant and key actions (never an operator key). The tasks
-  are three HTTP calls to the api-server (`pypkg/dnsapi/apiclient.py`; ns8-core's
-  `agent.tasks.run` cannot run in the broker's threads) and run as `module/dnsapi1`, so
-  dnshelper's policy applies.
+- **The broker** (`dnsapi-broker.service`, `server/dnsapi_server/broker.py`) is a second
+  container from the same image, as restricted as the first, and the only one with the module's
+  credentials (`agent.env`, read-only). For the service, over a Unix socket both mount, it runs
+  only dnshelper's reads, its four writes (only with `on_behalf_of`), and this module's tenant
+  and key actions (never an operator key). The tasks are three HTTP calls to the api-server
+  (`apiclient.py`) and run as `module/dnsapi1`, so dnshelper's policy applies. A host process
+  would have been simpler, but SELinux does not let a container connect to one.
 - **Limits**: at most 64 connections, 4 requests per key and 16 NS8 tasks at once; failed
   authentications counted per IPv4 address or IPv6 /64.
 - **Only actions write state.** The operator endpoints that change tenants, assignments and keys

@@ -256,6 +256,13 @@ def make_server(host, port, api, max_connections=MAX_CONNECTIONS):
 def main(argv=None):
     import argparse
 
+    argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == ["broker"]:
+        # the same image runs the broker in its own container (DESIGN.md, The broker)
+        from . import broker
+
+        return broker.main(argv[1:])
+
     parser = argparse.ArgumentParser(prog="dnsapi-server")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8080)

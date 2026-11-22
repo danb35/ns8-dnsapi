@@ -3,20 +3,21 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 # Run NS8 tasks through the api-server with the standard library, for the
-# broker (bin/dnsapi-broker). ns8-core's agent.tasks.run() cannot be used
-# from the broker's threads: it installs a SIGTERM handler with
-# loop.add_signal_handler(), which only works in the main thread.
+# broker (broker.py), which runs in its own container without ns8-core's
+# agent package. (agent.tasks.run() could not be used from the broker's
+# threads anyway: it installs a SIGTERM handler with
+# loop.add_signal_handler(), which only works in the main thread.)
 #
 #   POST /api/login                       {"username", "password"} -> {"token"}
 #   POST /api/<agent>/tasks               {"action", "data", "parent", "extra"} -> {"data": {"id"}}
 #   GET  /api/<agent>/task/<id>/status    400 or 404 until the task has ended
 #
-# The credentials are this module's (REDIS_USER, REDIS_PASSWORD, which
-# runagent sets from agent.env). Measured on a node: login 0.08 s, a short
+# The credentials are this module's, REDIS_USER and REDIS_PASSWORD from
+# agent.env, mounted read-only into the broker's container only. Only those
+# two are read: the file also sets PATH and PYTHONPATH. Measured on a node: login 0.08 s, a short
 # task 0.07 to 0.4 s with this polling.
 
 import json
-import os
 import threading
 import time
 import urllib.error
@@ -32,7 +33,9 @@ class Timeout(Exception):
 
 
 class ApiClient:
-    def __init__(self, endpoint="http://cluster-leader:9311", timeout=150.0, http_timeout=15.0):
+    def __init__(self, credentials_path, endpoint="http://cluster-leader:9311", timeout=150.0,
+                 http_timeout=15.0):
+        self.credentials_path = credentials_path
         self.endpoint = endpoint
         self.timeout = timeout
         self.http_timeout = http_timeout
@@ -48,9 +51,19 @@ class ApiClient:
         with urllib.request.urlopen(req, timeout=self.http_timeout) as resp:
             return json.load(resp)
 
+    def credentials(self):
+        """REDIS_USER and REDIS_PASSWORD from agent.env, read on each login (they can rotate)."""
+        values = {}
+        with open(self.credentials_path) as fp:
+            for line in fp:
+                name, sep, value = line.rstrip("\n").partition("=")
+                if sep and name in ("REDIS_USER", "REDIS_PASSWORD"):
+                    values[name] = value
+        return values["REDIS_USER"], values["REDIS_PASSWORD"]
+
     def _login(self):
-        reply = self._request("POST", "/api/login", {"username": os.environ["REDIS_USER"],
-                                                     "password": os.environ["REDIS_PASSWORD"]})
+        user, password = self.credentials()
+        reply = self._request("POST", "/api/login", {"username": user, "password": password})
         return reply["token"]
 
     def _authorized(self, method, path, body=None):

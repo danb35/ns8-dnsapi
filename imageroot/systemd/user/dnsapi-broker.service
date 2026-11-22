@@ -5,23 +5,53 @@
 
 #
 # The broker between the API service and NS8 (DESIGN.md, Runtime, The
-# broker): it holds this module's credentials, which the internet-facing
-# container never sees, and runs only the tasks the API needs. It listens on
-# a Unix socket in the user's runtime directory, which the API container
-# mounts. RuntimeDirectoryPreserve keeps the directory when the broker
-# restarts, so the container's mount of it stays valid.
+# broker): the only container with this module's NS8 credentials (agent.env,
+# read-only). It runs, for the internet-facing API container, only the tasks
+# the API needs, over a Unix socket in %t/dnsapi-broker, which both mount.
+#
+# It is a container, not a host process, because SELinux does not let a
+# container connect to a socket of an unconfined host process (tried on a
+# Rocky node, 2026-11-21); container to container it does. Same image as the
+# API service, run with the "broker" argument. It reads the dnshelper instance
+# from state/api/runtime.json (bin/discover-runtime) and reaches the api-server
+# at cluster-leader:9311 on the host network.
 #
 [Unit]
 Description=dnsapi broker to NS8
+Wants=network-online.target
+After=network-online.target
 
 [Service]
+Environment=PODMAN_SYSTEMD_UNIT=%n
+EnvironmentFile=%E/state/environment
 WorkingDirectory=%E/state
-RuntimeDirectory=dnsapi-broker
-RuntimeDirectoryMode=0700
-RuntimeDirectoryPreserve=yes
-ExecStart=runagent dnsapi-broker --socket %t/dnsapi-broker/broker.sock
 Restart=always
-RestartSec=2
+TimeoutStopSec=70
+SuccessExitStatus=143 137
+ExecStartPre=/bin/rm -f %t/dnsapi-broker.pid %t/dnsapi-broker.ctr-id
+ExecStartPre=/bin/mkdir -p %E/state/api %t/dnsapi-broker
+ExecStartPre=-runagent discover-runtime
+ExecStart=/usr/bin/podman run \
+    --detach \
+    --conmon-pidfile=%t/dnsapi-broker.pid \
+    --cidfile=%t/dnsapi-broker.ctr-id \
+    --cgroups=no-conmon \
+    --replace --name=%N \
+    --network=host \
+    --userns=keep-id --user=%U:%G \
+    --cap-drop=all --security-opt=no-new-privileges \
+    --read-only \
+    --volume=%E/state/agent.env:/run/credentials/agent.env:ro,z \
+    --volume=%E/state/api:/srv/state:ro,z \
+    --volume=%t/dnsapi-broker:/run/broker:z \
+    ${DNSAPI_SERVER_IMAGE} \
+    broker --socket=/run/broker/broker.sock
+# Hold the start until the socket exists, so the API service finds it.
+ExecStartPost=/bin/sh -c 'for i in $(seq 1 30); do [ -S %t/dnsapi-broker/broker.sock ] && exit 0; sleep 1; done; exit 1'
+ExecStop=/usr/bin/podman stop --ignore --cidfile %t/dnsapi-broker.ctr-id -t 10
+ExecStopPost=/usr/bin/podman rm --ignore -f --cidfile %t/dnsapi-broker.ctr-id
+PIDFile=%t/dnsapi-broker.pid
+Type=forking
 
 [Install]
 WantedBy=default.target

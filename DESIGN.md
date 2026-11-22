@@ -304,10 +304,20 @@ manages. `configure-module` then publishes it itself, so that the Let's Encrypt 
   grant, this module's own actions, Traefik's `routeadm` for every route on the node (so a
   compromised service could have sent another application's host name, and its users' logins,
   elsewhere) and `node:reader`, plus writes to the module's own Redis keys.
-  - A second user unit, `dnsapi-broker.service`, runs on the host as the module's user under
-    `runagent`, with ns8-core's `agent` package. It listens on a Unix socket in
-    `%t/dnsapi-broker/` (the user's runtime directory, not the state directory), the only path the
-    container mounts besides `state/api/` and `state/usage/`.
+  - A second container, `dnsapi-broker.service`, from the same image (`dnsapi-server broker`),
+    as restricted as the API container: the module's uid, no capabilities, read-only, host
+    network. It alone mounts `agent.env` (read-only; it reads only `REDIS_USER` and
+    `REDIS_PASSWORD`). It listens on a Unix socket (0600) in `%t/dnsapi-broker/`, the user's
+    runtime directory, which both containers mount. It reads the dnshelper instance from
+    `state/api/runtime.json`, written on the host by `bin/discover-runtime`, and runs tasks with
+    the standard-library api-server client the service had before.
+  - Why a container and not a host process under `runagent` (tried first, 2026-11-21): on a Rocky
+    node, SELinux does not let a container (`container_t`) connect to a socket of an unconfined
+    host process, without logging it; turning labelling off for the internet-facing container
+    would have given up a real layer. Container to container is allowed (tried with different
+    labels too). A loopback TCP port would have needed a second port (`update-module` records a
+    new `tcp-ports-demand` but allocates nothing; `node/allocate-ports` needs the `portsadm`
+    role) and a shared secret.
   - One JSON request per connection, `{"target": "dnshelper" | "self", "action", "data"}`,
     answered with the task's `{"exit_code", "output", "error"}`, or `{"refused"}` or
     `{"unavailable"}`. It runs only an allowlist: on dnshelper, `list-zones`, `get-records`,

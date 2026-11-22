@@ -3,9 +3,11 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 # The broker (DESIGN.md, Runtime, The broker): the only process that holds
-# this module's NS8 credentials on behalf of the API service. The service,
-# which faces the internet, asks it over a Unix socket to run a task, and it
-# runs only the tasks the API needs:
+# this module's NS8 credentials on behalf of the API service. It runs in its
+# own container (dnsapi-broker.service), with agent.env mounted read-only;
+# the API container, which faces the internet, has no credentials and asks it
+# over a Unix socket in a directory both mount to run a task. It runs only the
+# tasks the API needs:
 #
 #   request  {"target": "dnshelper" | "self", "action", "data"}   one JSON line
 #   answer   {"exit_code", "output", "error"}  or  {"refused": why}  or  {"unavailable": why}
@@ -16,7 +18,9 @@
 import json
 import logging
 import os
+import signal
 import socketserver
+import sys
 import threading
 
 from . import apiclient
@@ -56,10 +60,10 @@ def check(target, action, data):
 
 
 class Broker:
-    def __init__(self, find_dnshelper, self_agent, client=None, max_tasks=MAX_TASKS):
+    def __init__(self, find_dnshelper, self_agent, client, max_tasks=MAX_TASKS):
         self.find_dnshelper = find_dnshelper  # () -> "module/dnshelper1" or None
-        self.self_agent = self_agent
-        self.client = client or apiclient.ApiClient()
+        self.self_agent = self_agent  # () -> "module/dnsapi1"
+        self.client = client
         self.slots = threading.BoundedSemaphore(max_tasks)
 
     def handle(self, request):
@@ -75,7 +79,7 @@ class Broker:
             if not agent_id:
                 return {"unavailable": "dnshelper_missing"}
         else:
-            agent_id = self.self_agent
+            agent_id = self.self_agent()
         with self.slots:
             try:
                 return self.client.run(agent_id, action, data)
@@ -117,3 +121,35 @@ class Server(socketserver.ThreadingUnixStreamServer):
         finally:
             os.umask(old)
         self.broker = broker
+
+
+def main(argv):
+    import argparse
+
+    parser = argparse.ArgumentParser(prog="dnsapi-server broker")
+    parser.add_argument("--socket", default="/run/broker/broker.sock")
+    parser.add_argument("--credentials", default="/run/credentials/agent.env")
+    parser.add_argument("--runtime", default="/srv/state/runtime.json",
+                        help="written by bin/discover-runtime on the host: the dnshelper instance")
+    parser.add_argument("--endpoint", default="http://cluster-leader:9311")
+    args = parser.parse_args(argv)
+    logging.basicConfig(stream=sys.stderr, level=logging.INFO, format="%(levelname)s %(message)s")
+
+    client = apiclient.ApiClient(args.credentials, args.endpoint)
+
+    def find_dnshelper():
+        try:
+            with open(args.runtime) as fp:
+                return json.load(fp).get("dnshelper")
+        except (OSError, ValueError):
+            return None
+
+    def self_agent():
+        return client.credentials()[0]  # REDIS_USER is this module's agent id
+
+    server = Server(args.socket, Broker(find_dnshelper, self_agent, client))
+    signal.signal(signal.SIGTERM, lambda *a: threading.Thread(target=server.shutdown, daemon=True).start())
+    log.info("listening on %s", args.socket)
+    server.serve_forever()
+    server.server_close()
+    return 0

@@ -47,7 +47,7 @@ ExecStart=/usr/bin/podman run \
     --userns=keep-id --user=%U:%G \
     --cap-drop=all --security-opt=no-new-privileges \
     --read-only \
-    --volume=%E/state/api:/srv/state:ro,Z \
+    --volume=%E/state/api:/srv/state:ro,z \
     --volume=%E/state/usage:/srv/usage:Z \
     --volume=%t/dnsapi-broker:/run/broker:z \
     ${DNSAPI_SERVER_IMAGE} \

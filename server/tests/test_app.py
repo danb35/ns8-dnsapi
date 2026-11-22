@@ -857,6 +857,89 @@ class BrokerClientTest(unittest.TestCase):
             Backend(os.path.join(self.dir, "missing.sock"), timeout=2).run("self", "add-tenant", {})
 
 
+class BrokerTest(unittest.TestCase):
+    """The broker's allowlist and its socket (DESIGN.md, Runtime, The broker)."""
+
+    def setUp(self):
+        from dnsapi_server import broker
+        self.broker = broker
+        self.dir = tempfile.mkdtemp()
+        self.path = os.path.join(self.dir, "broker.sock")
+        self.calls = []
+        self.dnshelper = "module/dnshelper4"
+        test = self
+
+        class Client:
+            def run(self, agent_id, action, data):
+                test.calls.append((agent_id, action))
+                return {"exit_code": 0, "output": {"done": action}, "error": ""}
+
+        self.server = broker.Server(self.path, broker.Broker(lambda: self.dnshelper, lambda: "module/dnsapi3", Client()))
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.client = Backend(self.path, timeout=5)
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.server.server_close()
+        shutil.rmtree(self.dir)
+
+    def test_socket_mode(self):
+        self.assertEqual(os.stat(self.path).st_mode & 0o777, 0o600)
+
+    def test_allowlist(self):
+        allowed = [
+            ("dnshelper", "list-zones", {}),
+            ("dnshelper", "get-records", {"zone": "x"}),
+            ("dnshelper", "apply-changes", {"zone": "x", "on_behalf_of": "t1:k"}),
+            ("self", "add-tenant", {"name": "x"}),
+            ("self", "create-key", {"owner": "t00000001"}),
+            ("self", "revoke-key", {"id": "abcdef12"}),
+        ]
+        refused = [
+            ("dnshelper", "append-records", {"zone": "x"}),  # no on_behalf_of
+            ("dnshelper", "set-policy", {"rules": []}),
+            ("dnshelper", "add-zone", {}),
+            ("dnshelper", "has-zone", {"name": "x"}),
+            ("self", "configure-module", {}),
+            ("self", "create-key", {"owner": "operator"}),
+            ("traefik", "set-route", {}),
+            ("node", "get-fqdn", {}),
+        ]
+        for target, action, data in allowed:
+            self.assertEqual(self.client.run(target, action, data), {"done": action})
+        for target, action, data in refused:
+            with self.assertRaises(TaskFailed, msg=(target, action)):
+                self.client.run(target, action, data)
+        self.assertEqual([c[1] for c in self.calls], [a[1] for a in allowed])
+        self.assertEqual(self.calls[0][0], "module/dnshelper4")
+        self.assertEqual(self.calls[3][0], "module/dnsapi3")
+
+    def test_dnshelper_missing(self):
+        self.dnshelper = None
+        with self.assertRaises(DnshelperMissing):
+            self.client.run("dnshelper", "list-zones", {})
+
+    def test_garbage(self):
+        import socket
+        with socket.socket(socket.AF_UNIX) as sock:
+            sock.connect(self.path)
+            sock.sendall(b"not json\n")
+            self.assertIn("refused", json.loads(sock.makefile().readline()))
+
+
+class ApiClientTest(unittest.TestCase):
+    def test_reads_only_the_credentials(self):
+        from dnsapi_server.apiclient import ApiClient
+        directory = tempfile.mkdtemp()
+        try:
+            path = os.path.join(directory, "agent.env")
+            with open(path, "w") as fp:
+                fp.write("PATH=/bad\nREDIS_USER=module/dnsapi7\nREDIS_PASSWORD=p=w\nPYTHONPATH=/bad\n")
+            self.assertEqual(ApiClient(path).credentials(), ("module/dnsapi7", "p=w"))
+        finally:
+            shutil.rmtree(directory)
+
+
 class KeyTest(unittest.TestCase):
     def test_format(self):
         key_id, key, key_hash = keyfmt.new_key()

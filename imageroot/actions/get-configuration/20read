@@ -20,7 +20,7 @@ def load(name, default):
         return default
 
 
-settings = {**DEFAULTS, **load("settings.json", {})}
+settings = {**DEFAULTS, **load("api/settings.json", {})}
 output = {key: settings[key] for key in DEFAULTS}
 # What configure-module found about the host name's DNS record (DESIGN.md,
 # The API host name in DNS); null until it has run

@@ -1,0 +1,27 @@
+#
+# Copyright (C) 2026 Dan Brown
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+
+#
+# The broker between the API service and NS8 (DESIGN.md, Runtime, The
+# broker): it holds this module's credentials, which the internet-facing
+# container never sees, and runs only the tasks the API needs. It listens on
+# a Unix socket in the user's runtime directory, which the API container
+# mounts. RuntimeDirectoryPreserve keeps the directory when the broker
+# restarts, so the container's mount of it stays valid.
+#
+[Unit]
+Description=dnsapi broker to NS8
+
+[Service]
+WorkingDirectory=%E/state
+RuntimeDirectory=dnsapi-broker
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+ExecStart=runagent dnsapi-broker --socket %t/dnsapi-broker/broker.sock
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=default.target

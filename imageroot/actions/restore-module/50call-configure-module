@@ -6,7 +6,8 @@
 #
 
 #
-# Restic has put back state/settings.json (etc/state-include.conf). Run
+# Restic has put back state/api/settings.json (40move_api moves an older
+# backup's state/settings.json there) (etc/state-include.conf). Run
 # configure-module with an empty request: it keeps every restored setting,
 # publishes the Traefik route on this node and starts the service.
 #
@@ -19,7 +20,7 @@ import agent
 import agent.tasks
 
 try:
-    with open("settings.json") as fp:
+    with open("api/settings.json") as fp:
         host = json.load(fp).get("host")
 except FileNotFoundError:
     host = None

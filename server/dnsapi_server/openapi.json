@@ -1067,7 +1067,7 @@
       "properties": {
        "code": {
         "type": "string",
-        "description": "invalid_request, invalid_json, missing_key, invalid_key, key_expired, insufficient_scope, tenant_disabled, address_not_allowed, restricted_key, outside_restriction, not_found, zone_not_found, tenant_not_found, key_not_found, stale, conflict, zone_assigned, zone_not_assignable, reserved_name, body_too_large, rate_limited, upstream_error, upstream_timeout, unavailable, dnshelper_missing, and dnshelper's own codes such as not_permitted and forbidden"
+        "description": "invalid_request, invalid_json, missing_key, invalid_key, key_expired, insufficient_scope, tenant_disabled, address_not_allowed, restricted_key, outside_restriction, not_found, zone_not_found, tenant_not_found, key_not_found, stale, conflict, zone_assigned, zone_not_assignable, reserved_name, https_required, body_too_large, rate_limited, too_many_concurrent, busy, upstream_error, upstream_timeout, unavailable, dnshelper_missing, and dnshelper's own codes such as not_permitted and forbidden"
        },
        "message": {
         "type": "string"

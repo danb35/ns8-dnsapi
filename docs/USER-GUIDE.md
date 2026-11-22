@@ -284,6 +284,11 @@ it; dnsapi notices within moments.
 no write rule for dnsapi on it, or the zone is not in dnshelper. Check the Tenants page. A tenant key gets 404 for any zone that is not its
 own, so that a key does not reveal which zones you manage.
 
+**`403 https_required`**: the client used `http://`. Use the `https://` address. The key it sent
+crossed the network unencrypted: the module's log names it (`was sent over plain HTTP`), and if
+the network may be watched, revoke it and make another. "Redirect HTTP to HTTPS" does not help
+here: the key is sent before the redirect.
+
 **`403 reserved_name`**: the record is the API's own host name, or its `_acme-challenge`; change
 it on dnshelper's Records page.
 
@@ -300,7 +305,9 @@ record in a zone with only the ACME preset.
 tenant.
 
 **`429 rate_limited`**: the key made more than `rate_limit` DNS requests in a minute, or its
-address failed to authenticate ten times in a minute. The `Retry-After` header says how many
+address (for IPv6, its /64 network) failed to authenticate ten times in a minute. **`429
+too_many_concurrent`**: more than four requests of one key at once. **`503 busy`**: the service
+is handling as much as it allows at once. In each case the `Retry-After` header says how many
 seconds to wait.
 
 **`502 upstream_error`** or **`504 upstream_timeout`**: the DNS host refused or did not answer.

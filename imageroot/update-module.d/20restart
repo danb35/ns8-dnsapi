@@ -5,7 +5,11 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 
-# Run the new server image. try-restart leaves a stopped (not yet
-# configured) service alone.
+# Run the new images and code. try-restart leaves a stopped (not yet
+# configured) service alone. An instance configured before the broker
+# existed gets it enabled here (DESIGN.md, Runtime, The broker).
 exec 1>&2
-systemctl --user try-restart dnsapi.service
+if systemctl --user -q is-enabled dnsapi.service; then
+    systemctl --user enable --now dnsapi-broker.service
+fi
+systemctl --user try-restart dnsapi-broker.service dnsapi.service

@@ -3,7 +3,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 # Read-only view of the module state that the actions write (DESIGN.md,
-# Runtime). The state directory is mounted read-only; files are replaced
+# Runtime). state/api/ is mounted read-only, without the rest of state/ and
+# so without the module's NS8 credentials, which only the broker holds; files are replaced
 # atomically, so a changed modification time means a complete new file.
 # The only thing the service writes is the last-used time of each key, in
 # a separate writable directory.
@@ -14,7 +15,6 @@
 #                                         "allowlist", "expires", "created"}}}
 #   runtime.json   bin/discover-runtime: {"dnshelper": "module/dnshelper1" | null,
 #                                         "proxies_depth": 0}
-#   agent.env      the module's api-server credentials (REDIS_USER, REDIS_PASSWORD)
 
 import datetime
 import json
@@ -119,16 +119,6 @@ class Store:
             if zone in tenant.get("zones", []):
                 return tenant_id
         return None
-
-    def credentials(self):
-        """REDIS_USER and REDIS_PASSWORD from agent.env, read on each call (they can rotate)."""
-        values = {}
-        with open(os.path.join(self.state_dir, "agent.env")) as fp:
-            for line in fp:
-                name, sep, value = line.rstrip("\n").partition("=")
-                if sep and name in ("REDIS_USER", "REDIS_PASSWORD"):
-                    values[name] = value
-        return values["REDIS_USER"], values["REDIS_PASSWORD"]
 
     # activity (DESIGN.md, Admin UI): the journal is not readable by the module's
     # user, so the changes are also kept in usage/activity.jsonl for the Activity

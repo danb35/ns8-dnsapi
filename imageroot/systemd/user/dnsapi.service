@@ -9,20 +9,22 @@
 # container. It listens on 127.0.0.1 only; Traefik routes the API host name
 # to it (configure-module).
 #
-# --network=host: the service calls NS8 tasks on the api-server at
-# cluster-leader:9311, which is 127.0.0.1 on the leader node, unreachable
-# from a separate network namespace. It binds 127.0.0.1:${TCP_PORT} itself.
+# The container holds no NS8 credentials: it asks dnsapi-broker.service to
+# run tasks, over the Unix socket in %t/dnsapi-broker (DESIGN.md, Runtime,
+# The broker). It mounts only state/api/ read-only (the files the actions
+# write for it; a directory, because the actions replace files by renaming),
+# state/usage/ (last-used times, activity) and the broker's socket directory.
+# agent.env and apitoken.cache, in state/, are not in the container.
 #
-# --userns=keep-id --user %U:%U: the container runs as the module's own uid,
-# so it can read the 0600 state files the actions write, agent.env (the
-# module's api-server credentials) among them. The state directory is
-# mounted read-only, whole, because the actions replace files by renaming;
-# usage/ is the only place the service writes (the keys' last-used times).
+# --network=host: Traefik's connections then come from loopback, which the
+# X-Forwarded-For handling relies on; it binds 127.0.0.1:${TCP_PORT} itself.
+# --userns=keep-id --user %U:%G: the module's own uid, to read the 0600 files
+# and reach the 0600 socket. No capabilities, no privilege gain.
 #
 [Unit]
 Description=dnsapi API server
-Wants=network-online.target
-After=network-online.target
+Wants=network-online.target dnsapi-broker.service
+After=network-online.target dnsapi-broker.service
 
 [Service]
 Environment=PODMAN_SYSTEMD_UNIT=%n
@@ -33,7 +35,7 @@ TimeoutStopSec=70
 # podman stop sends SIGTERM; conmon then exits 143 (137 after SIGKILL).
 SuccessExitStatus=143 137
 ExecStartPre=/bin/rm -f %t/dnsapi.pid %t/dnsapi.ctr-id
-ExecStartPre=/bin/mkdir -p %E/state/usage
+ExecStartPre=/bin/mkdir -p %E/state/api %E/state/usage %t/dnsapi-broker
 ExecStartPre=-runagent discover-runtime
 ExecStart=/usr/bin/podman run \
     --detach \
@@ -43,9 +45,11 @@ ExecStart=/usr/bin/podman run \
     --replace --name=%N \
     --network=host \
     --userns=keep-id --user=%U:%G \
+    --cap-drop=all --security-opt=no-new-privileges \
     --read-only \
-    --volume=%E/state:/srv/state:ro,Z \
+    --volume=%E/state/api:/srv/state:ro,Z \
     --volume=%E/state/usage:/srv/usage:Z \
+    --volume=%t/dnsapi-broker:/run/broker:z \
     ${DNSAPI_SERVER_IMAGE} \
     --host=127.0.0.1 --port=${TCP_PORT}
 # podman run --detach returns once the container exists, before the service

@@ -18,6 +18,7 @@ import urllib.parse
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from . import keys as keyfmt
 from .api import Api, ApiError, Request, client_address, match_route
 from .backend import Backend
 from .limits import SlidingWindow
@@ -26,6 +27,7 @@ from .store import Store
 log = logging.getLogger("dnsapi")
 
 MAX_BODY = 1024 * 1024  # DESIGN.md, Security, Limits
+MAX_CONNECTIONS = 64     # DESIGN.md, Security, Concurrency limits
 OPENAPI_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "openapi.json")
 
 
@@ -78,6 +80,7 @@ class Handler(BaseHTTPRequestHandler):
                 with open(OPENAPI_PATH) as fp:
                     self._send_json(HTTPStatus.OK, json.load(fp), head=head)
                 return
+            self._require_https()
             body = self._read_body()
             api = self.api
             runtime = api.store.runtime()
@@ -91,14 +94,18 @@ class Handler(BaseHTTPRequestHandler):
             )
             self.client_ip = req.client_ip
             api.authenticate(req, self.headers.get("Authorization"))
-            methods, params = match_route(path)
-            if methods is None:
-                raise ApiError(HTTPStatus.NOT_FOUND, "not_found", "No such endpoint")
-            name = methods.get("GET" if head else method)
-            if name is None:
-                raise self._not_allowed(method, set(methods))
-            req.params = {k: urllib.parse.unquote(v) for k, v in params.items()}
-            status, payload = getattr(api, name)(req)
+            api.enter(req)
+            try:
+                methods, params = match_route(path)
+                if methods is None:
+                    raise ApiError(HTTPStatus.NOT_FOUND, "not_found", "No such endpoint")
+                name = methods.get("GET" if head else method)
+                if name is None:
+                    raise self._not_allowed(method, set(methods))
+                req.params = {k: urllib.parse.unquote(v) for k, v in params.items()}
+                status, payload = getattr(api, name)(req)
+            finally:
+                api.leave(req)
             self._send_json(status, payload, head=head)
         except ApiError as exc:
             error = {"code": exc.code, "message": exc.message, "field": exc.field}
@@ -107,6 +114,21 @@ class Handler(BaseHTTPRequestHandler):
             log.exception("unhandled error on %s %s", method, path)
             error = {"code": "internal_error", "message": "Internal error", "field": None}
             self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": error}, head=head)
+
+    def _require_https(self):
+        """Refuse a request Traefik received over plain HTTP (DESIGN.md, Security, HTTPS
+        only). Traefik sets X-Forwarded-Proto; a request without it comes straight from the
+        node. The key, if any, has crossed the network in the clear: log its id."""
+        proto = (self.headers.get("X-Forwarded-Proto") or "").split(",")[0].strip().lower()
+        if not proto or proto == "https":
+            return
+        scheme, _, key = (self.headers.get("Authorization") or "").partition(" ")
+        key_id = keyfmt.parse_key(key.strip()) if scheme.lower() == "bearer" else None
+        if key_id:
+            log.warning("key %s was sent over plain HTTP from %s: revoke it if the network may be watched",
+                        key_id, self.headers.get("X-Forwarded-For") or self.client_address[0])
+        self.close_connection = True
+        raise ApiError(HTTPStatus.FORBIDDEN, "https_required", "Use https://: the API refuses plain HTTP")
 
     @staticmethod
     def _not_allowed(method, methods):
@@ -184,17 +206,51 @@ class Handler(BaseHTTPRequestHandler):
         log.info("%s %s", address, format % args)
 
 
-def make_api(state_dir, usage_dir=None, endpoint="http://cluster-leader:9311", backend=None):
+def make_api(state_dir, usage_dir=None, broker="/run/broker/broker.sock", backend=None):
     store = Store(state_dir, usage_dir)
-    backend = backend or Backend(store, endpoint)
+    backend = backend or Backend(broker)
     return Api(store, backend, SlidingWindow(60.0), SlidingWindow(60.0))
 
 
-def make_server(host, port, api):
+BUSY = json.dumps({"error": {"code": "busy", "message": "Too many connections; try again", "field": None}}).encode()
+
+
+class Server(ThreadingHTTPServer):
+    """A thread per connection, at most max_connections at once: one more is answered
+    503 and closed (DESIGN.md, Security, Concurrency limits)."""
+
+    daemon_threads = True
+
+    def __init__(self, address, handler, max_connections=MAX_CONNECTIONS):
+        self.slots = threading.BoundedSemaphore(max_connections)
+        super().__init__(address, handler)
+
+    def process_request(self, request, client_address):
+        if not self.slots.acquire(blocking=False):
+            try:
+                request.sendall(b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\n"
+                                b"Retry-After: 5\r\nConnection: close\r\nContent-Length: "
+                                + str(len(BUSY)).encode() + b"\r\n\r\n" + BUSY)
+            except OSError:
+                pass
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except Exception:
+            self.slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self.slots.release()
+
+
+def make_server(host, port, api, max_connections=MAX_CONNECTIONS):
     handler = type("BoundHandler", (Handler,), {"api": api})
-    server = ThreadingHTTPServer((host, port), handler)
-    server.daemon_threads = True
-    return server
+    return Server((host, port), handler, max_connections)
 
 
 def main(argv=None):
@@ -205,11 +261,11 @@ def main(argv=None):
     parser.add_argument("--port", type=int, default=8080)
     parser.add_argument("--state-dir", default="/srv/state")
     parser.add_argument("--usage-dir", default="/srv/usage")
-    parser.add_argument("--endpoint", default="http://cluster-leader:9311")
+    parser.add_argument("--broker", default="/run/broker/broker.sock")
     args = parser.parse_args(argv)
 
     logging.basicConfig(stream=sys.stderr, level=logging.INFO, format="%(levelname)s %(message)s")
-    api = make_api(args.state_dir, args.usage_dir, args.endpoint)
+    api = make_api(args.state_dir, args.usage_dir, args.broker)
     server = make_server(args.host, args.port, api)
     stopping = threading.Event()
 

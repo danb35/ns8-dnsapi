@@ -13,12 +13,13 @@ import os
 import shutil
 import tempfile
 import threading
+import time
 import unittest
 
 from dnsapi_server import keys as keyfmt
 from dnsapi_server.api import Api, client_address
 from dnsapi_server.app import make_api, make_server
-from dnsapi_server.backend import Backend, TaskFailed, TaskRefused, Unavailable
+from dnsapi_server.backend import Backend, DnshelperMissing, TaskFailed, TaskRefused, Unavailable
 from dnsapi_server.limits import SlidingWindow
 from dnsapi_server.store import Store
 
@@ -46,11 +47,11 @@ def write_json(directory, name, data):
         json.dump(data, fp)
 
 
-class FakeBackend(Backend):
-    """dnshelper and this module's own actions, without NS8."""
+class FakeBackend:
+    """dnshelper and this module's own actions, as the broker would run them, without NS8."""
 
     def __init__(self, store):
-        super().__init__(store)
+        self.store = store
         self.calls = []
         self.fail_with = None
 
@@ -59,7 +60,7 @@ class FakeBackend(Backend):
         if self.fail_with:
             raise self.fail_with
         state = self.store.state_dir
-        if agent_id == "module/dnshelper1":
+        if agent_id == "dnshelper":
             if action == "list-zones":
                 return {"zones": ZONES}
             if action == "get-records":
@@ -95,7 +96,7 @@ class FakeBackend(Backend):
             if action == "check-propagation":
                 return {"zone": data["zone"], "name": data["name"], "type": data["type"],
                         "records": [], "servers_from": "dns", "servers": []}
-        if agent_id == "module/dnsapi1":
+        if agent_id == "self":
             tenants = json.load(open(os.path.join(state, "tenants.json")))
             keys = json.load(open(os.path.join(state, "keys.json")))
             if action == "add-tenant":
@@ -282,6 +283,88 @@ class ApiTest(unittest.TestCase):
         resp, body = self.request("GET", "/v1/tenants", "operator", headers={"X-Forwarded-For": "198.51.100.1"})
         self.assertEqual(resp.status, 200)
 
+    # hardening (DESIGN.md, Security: HTTPS only, Concurrency limits, Brute force)
+
+    def test_plain_http_is_refused(self):
+        resp, body = self.request("GET", "/v1/tenants", "operator", headers={"X-Forwarded-Proto": "http"})
+        self.assertError(resp, body, 403, "https_required")
+        resp, body = self.request("GET", "/v1/tenants", "operator", headers={"X-Forwarded-Proto": "https"})
+        self.assertEqual(resp.status, 200)
+        resp, body = self.request("GET", "/v1/tenants", "operator")  # straight from the node
+        self.assertEqual(resp.status, 200)
+        resp, body = self.request("GET", "/v1/status", headers={"X-Forwarded-Proto": "http"})
+        self.assertEqual(resp.status, 200)
+
+    def test_per_key_concurrency(self):
+        from dnsapi_server import api as apimod
+        key_id = self.key_id("operator")
+        self.api.in_flight[key_id] = apimod.MAX_PER_KEY
+        resp, body = self.request("GET", "/v1/tenants", "operator")
+        self.assertError(resp, body, 429, "too_many_concurrent")
+        self.assertEqual(resp.getheader("Retry-After"), "5")
+        resp, body = self.request("GET", "/v1/tenants", "operator_ro")  # another key
+        self.assertEqual(resp.status, 200)
+        self.api.in_flight.clear()
+        resp, body = self.request("GET", "/v1/tenants", "operator")
+        self.assertEqual(resp.status, 200)
+        self.assertEqual(self.api.in_flight, {})  # released after each request
+
+    def test_task_slots(self):
+        from dnsapi_server import api as apimod
+        saved = apimod.TASK_SLOT_WAIT
+        apimod.TASK_SLOT_WAIT = 0.2
+        taken = 0
+        try:
+            while self.api.task_slots.acquire(blocking=False):
+                taken += 1
+            self.assertEqual(taken, apimod.MAX_TASKS)
+            resp, body = self.request("GET", "/v1/zones", "acme")
+            self.assertError(resp, body, 503, "busy")
+        finally:
+            apimod.TASK_SLOT_WAIT = saved
+            for _ in range(taken):
+                self.api.task_slots.release()
+        resp, body = self.request("GET", "/v1/zones", "acme")
+        self.assertEqual(resp.status, 200)
+
+    def test_connection_cap(self):
+        import socket
+        server = make_server("127.0.0.1", 0, self.api, max_connections=1)
+        port = server.server_address[1]
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            idle = socket.create_connection(("127.0.0.1", port), timeout=5)  # holds the only slot
+            time.sleep(0.2)
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+            conn.request("GET", "/v1/status")
+            resp = conn.getresponse()
+            self.assertEqual(resp.status, 503)
+            self.assertEqual(json.loads(resp.read())["error"]["code"], "busy")
+            conn.close()
+            idle.close()
+            time.sleep(0.3)
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+            conn.request("GET", "/v1/status")
+            self.assertEqual(conn.getresponse().status, 200)
+            conn.close()
+        finally:
+            server.shutdown()
+            server.server_close()
+
+    def test_ipv6_failures_counted_per_64(self):
+        from dnsapi_server.api import throttle_key
+        self.assertEqual(throttle_key("2001:db8:1:2:aaaa::1"), "2001:db8:1:2::/64")
+        self.assertEqual(throttle_key("2001:db8:1:2:ffff::9"), "2001:db8:1:2::/64")
+        self.assertEqual(throttle_key("::ffff:203.0.113.5"), "203.0.113.5")
+        self.assertEqual(throttle_key("203.0.113.5"), "203.0.113.5")
+        bad = "dnsapi_00000000_" + "a" * 52
+        for i in range(10):
+            self.request("GET", "/v1/zones", bad, headers={"X-Forwarded-For": f"2001:db8:1:2::{i + 1:x}"})
+        resp, body = self.request("GET", "/v1/tenants", "operator", headers={"X-Forwarded-For": "2001:db8:1:2::ff"})
+        self.assertError(resp, body, 429, "rate_limited")
+        resp, body = self.request("GET", "/v1/tenants", "operator", headers={"X-Forwarded-For": "2001:db8:1:3::1"})
+        self.assertEqual(resp.status, 200)
+
     def test_client_address(self):
         self.assertEqual(client_address("127.0.0.1", ["203.0.113.5"], 0), "203.0.113.5")
         self.assertEqual(client_address("127.0.0.1", ["198.51.100.9, 203.0.113.5"], 1), "198.51.100.9")
@@ -351,8 +434,7 @@ class ApiTest(unittest.TestCase):
         self.assertError(resp, body, 400, "invalid_request")
 
     def test_dnshelper_missing(self):
-        write_json(self.dir, "runtime.json", {"dnshelper": None, "proxies_depth": 0})
-        os.utime(os.path.join(self.dir, "runtime.json"), (1, 1))
+        self.backend.fail_with = DnshelperMissing("dnshelper is not installed")
         resp, body = self.request("GET", "/v1/zones", "acme")
         self.assertError(resp, body, 503, "dnshelper_missing")
 
@@ -684,7 +766,7 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(body["id"], "t00000009")
         self.assertEqual(body["name"], "Gamma")
         call = self.backend.calls[-1]
-        self.assertEqual(call, ("module/dnsapi1", "add-tenant", {"name": "Gamma"}))
+        self.assertEqual(call, ("self", "add-tenant", {"name": "Gamma"}))
 
     def test_get_tenant(self):
         resp, body = self.request("GET", "/v1/tenants/t00000001", "operator")
@@ -725,17 +807,54 @@ class ApiTest(unittest.TestCase):
         self.assertError(resp, body, 404, "key_not_found")
 
 
-class StoreTest(unittest.TestCase):
-    def test_credentials_only_redis(self):
-        directory = tempfile.mkdtemp()
-        try:
-            with open(os.path.join(directory, "agent.env"), "w") as fp:
-                fp.write("PATH=/bad\nREDIS_USER=module/dnsapi7\nREDIS_PASSWORD=p=w\nPYTHONPATH=/bad\n")
-            api = make_api(directory)
-            self.assertEqual(api.store.credentials(), ("module/dnsapi7", "p=w"))
-            self.assertEqual(api.backend.agent_id(), "module/dnsapi7")
-        finally:
-            shutil.rmtree(directory)
+class BrokerClientTest(unittest.TestCase):
+    """The service's side of the broker protocol, against a fake broker socket."""
+
+    def setUp(self):
+        import socketserver
+        self.dir = tempfile.mkdtemp()
+        self.path = os.path.join(self.dir, "broker.sock")
+        self.answer = {}
+        self.seen = []
+        test = self
+
+        class H(socketserver.StreamRequestHandler):
+            def handle(self):
+                test.seen.append(json.loads(self.rfile.readline()))
+                self.wfile.write(json.dumps(test.answer).encode() + b"\n")
+
+        self.server = socketserver.ThreadingUnixStreamServer(self.path, H)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.backend = Backend(self.path, timeout=5)
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.server.server_close()
+        shutil.rmtree(self.dir)
+
+    def test_answers(self):
+        self.answer = {"exit_code": 0, "output": {"zones": []}, "error": ""}
+        self.assertEqual(self.backend.run("dnshelper", "list-zones", {}), {"zones": []})
+        self.assertEqual(self.seen[-1], {"target": "dnshelper", "action": "list-zones", "data": {}})
+        self.answer = {"exit_code": 2, "output": [{"field": "zone", "error": "stale"}]}
+        with self.assertRaises(TaskRefused):
+            self.backend.run("dnshelper", "apply-changes", {})
+        self.answer = {"exit_code": 1, "output": None, "error": "boom"}
+        with self.assertRaises(TaskFailed):
+            self.backend.run("dnshelper", "get-records", {})
+        self.answer = {"unavailable": "dnshelper_missing"}
+        with self.assertRaises(DnshelperMissing):
+            self.backend.run("dnshelper", "list-zones", {})
+        self.answer = {"unavailable": "api_server"}
+        with self.assertRaises(Unavailable):
+            self.backend.run("self", "add-tenant", {})
+        self.answer = {"refused": "not allowed"}
+        with self.assertRaises(TaskFailed):
+            self.backend.run("self", "add-tenant", {})
+
+    def test_no_broker(self):
+        with self.assertRaises(Unavailable):
+            Backend(os.path.join(self.dir, "missing.sock"), timeout=2).run("self", "add-tenant", {})
 
 
 class KeyTest(unittest.TestCase):

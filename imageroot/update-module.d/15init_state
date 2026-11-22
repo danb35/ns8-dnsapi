@@ -15,8 +15,8 @@ sys.path.insert(0, os.path.join(os.environ["AGENT_INSTALL_DIR"], "pypkg"))
 from dnsapi import state
 
 with state.locked():
-    if state.load("tenants.json", None) is None:
+    if state.load(state.TENANTS, None) is None:
         state.save_tenants({})
-    if state.load("keys.json", None) is None:
+    if state.load(state.KEYS, None) is None:
         state.save_keys({})
 os.makedirs(state.path("usage"), exist_ok=True)

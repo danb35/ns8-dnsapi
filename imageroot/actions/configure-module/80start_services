@@ -9,5 +9,6 @@
 set -e
 exec 1>&2
 
-# If the control reaches this step, the service can be enabled and started
+# The broker first: the API service asks it to run every NS8 task.
+systemctl --user enable --now dnsapi-broker.service
 systemctl --user enable --now dnsapi.service

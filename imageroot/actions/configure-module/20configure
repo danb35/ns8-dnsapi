@@ -6,7 +6,7 @@
 #
 
 #
-# Merge the request into state/settings.json and publish the API on its
+# Merge the request into state/api/settings.json and publish the API on its
 # host name through Traefik (DESIGN.md, Security, Transport). The route
 # instance is MODULE_ID, so ns8-traefik removes it with the module.
 #
@@ -31,7 +31,7 @@ import agent.tasks
 sys.path.insert(0, os.path.join(os.environ["AGENT_INSTALL_DIR"], "pypkg"))
 from dnsapi import dnshelper, hostrecord
 
-SETTINGS = "settings.json"
+SETTINGS = "api/settings.json"
 DEFAULTS = {"host": None, "lets_encrypt": False, "http2https": True, "ip_allowlist": [], "rate_limit": 60,
             "publish_host_record": True}
 
@@ -110,6 +110,7 @@ if response["exit_code"] != 0:
         sys.exit(2)
     sys.exit(1)
 
+os.makedirs("api", exist_ok=True)
 with agent.safe_open(SETTINGS, "w") as fp:
     json.dump(settings, fp, indent=2)
     fp.write("\n")

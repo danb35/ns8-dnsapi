@@ -60,7 +60,7 @@ is how the first operator key is made. The API service calls the tenant and key 
 
 ## API
 
-Base URL `https://<host>/v1`. The OpenAPI 3.1 document is at `/v1/openapi.json`, without a key
+Base URL `https://<host>/v1`; plain HTTP is refused, and a key sent over it should be revoked. The OpenAPI 3.1 document is at `/v1/openapi.json`, without a key
 (`server/make_openapi.py` writes it; a unit test checks that it describes every route). Send the key as `Authorization: Bearer <key>`; keys look like
 `dnsapi_<8 hex>_<52 base32>`. Bodies are JSON, at most 1 MB. A read key may only `GET`. Errors
 are `{"error": {"code", "message", "field"}}`:
@@ -69,12 +69,12 @@ are `{"error": {"code", "message", "field"}}`:
 |---|---|
 | 400 | `invalid_request`, `invalid_json` (with `field`), and dnshelper's `invalid_request`, `unsupported` |
 | 401 | `missing_key`, `invalid_key`, `key_expired` |
-| 403 | `insufficient_scope`, `tenant_disabled`, `address_not_allowed`, `restricted_key`, `outside_restriction`, `reserved_name` (the API's own host name and its `_acme-challenge`); dnshelper's `not_permitted`, `forbidden` (apex NS, SOA) |
+| 403 | `insufficient_scope`, `tenant_disabled`, `address_not_allowed`, `restricted_key`, `outside_restriction`, `reserved_name` (the API's own host name and its `_acme-challenge`), `https_required` (the request came over plain HTTP); dnshelper's `not_permitted`, `forbidden` (apex NS, SOA) |
 | 404 | `not_found`, `zone_not_found`, `tenant_not_found`, `key_not_found` |
 | 409 | `stale` (a record to remove is gone), `conflict` (e.g. a CNAME beside other records), `zone_assigned` |
 | 413 | `body_too_large` |
-| 429 | `rate_limited`, with `Retry-After` |
-| 502, 503, 504 | `upstream_error` (the DNS host failed), `dnshelper_missing` or `unavailable`, `upstream_timeout` |
+| 429 | `rate_limited`, `too_many_concurrent` (more than 4 requests of one key at once), with `Retry-After` |
+| 502, 503, 504 | `upstream_error` (the DNS host failed), `dnshelper_missing`, `unavailable` or `busy` (too many requests at once for the whole service), `upstream_timeout` |
 
 A tenant key gets 404, not 403, for a zone it does not own and for the operator endpoints, so a
 key cannot be used to find out which zones are managed.
@@ -182,20 +182,27 @@ history names the tenant.
 - **Two images.** `dnsapi` is the NS8 module (actions, systemd unit, UI); `dnsapi-server`
   (`server/Containerfile`) is the API service, Python standard library only. They are published
   together with the same tag.
-- **The service** runs rootless with `--network=host`, because it calls NS8 tasks on the
-  api-server at `cluster-leader:9311`, which is `127.0.0.1` on the leader node. It listens on
-  `127.0.0.1:${TCP_PORT}`, and Traefik routes the API host name to it. It runs as the module's
-  uid with the state directory mounted read-only, and writes only `state/usage/`.
-- **NS8 tasks** are three HTTP calls (log in, post the task, read its status), done in
-  `server/dnsapi_server/backend.py` with the credentials from `agent.env`. A task runs as
-  `module/dnsapi1`, so dnshelper's policy applies to it.
+- **The service** runs rootless with `--network=host`, listens on `127.0.0.1:${TCP_PORT}`, and
+  Traefik routes the API host name to it. It runs as the module's uid with no capabilities,
+  mounts only `state/api/` read-only, `state/usage/` and the broker's socket directory, and
+  **holds no NS8 credentials**.
+- **The broker** (`dnsapi-broker.service`, `server/dnsapi_server/broker.py`) is a second
+  container from the same image, as restricted as the first, and the only one with the module's
+  credentials (`agent.env`, read-only). For the service, over a Unix socket both mount, it runs
+  only dnshelper's reads, its four writes (only with `on_behalf_of`), and this module's tenant
+  and key actions (never an operator key). The tasks are three HTTP calls to the api-server
+  (`apiclient.py`) and run as `module/dnsapi1`, so dnshelper's policy applies. A host process
+  would have been simpler, but SELinux does not let a container connect to one.
+- **Limits**: at most 64 connections, 4 requests per key and 16 NS8 tasks at once; failed
+  authentications counted per IPv4 address or IPv6 /64.
 - **Only actions write state.** The operator endpoints that change tenants, assignments and keys
   call this module's own actions through its `selfadm` role, granted in
   `create-module/10grants` (and `update-module.d/10grants`). A key's secret is made by the caller
   and only its hash reaches an action, so no secret is ever kept in Redis.
-- **State** (`pypkg/dnsapi/state.py`): `settings.json`, `tenants.json`, `keys.json`, all 0600,
-  replaced atomically under a lock; `runtime.json`, written by `bin/discover-runtime` (the
-  dnshelper instance, Traefik's `PROXIES_DEPTH`); `usage/last-used.json`, written by the service.
+- **State** (`pypkg/dnsapi/state.py`): `api/settings.json`, `api/tenants.json`,
+  `api/keys.json`, all 0600, replaced atomically under a lock; `api/runtime.json`, written by
+  `bin/discover-runtime` (Traefik's `PROXIES_DEPTH`); `usage/last-used.json`, written by the
+  service. An update or a restore moves them from their place before the broker, `state/`.
   The service rereads a file when its modification time changes. The Activity page reads
   `usage/activity.jsonl` (the service's changes) and `usage/admin-activity.jsonl` (the actions'
   changes not made by the service), each trimmed to recent entries: the module's user cannot read
@@ -232,7 +239,8 @@ dnsapi is an ordinary dnshelper consumer
 
 ## Backup and restore
 
-`etc/state-include.conf` backs up `settings.json`, `tenants.json` and `keys.json`.
+`etc/state-include.conf` backs up `api/settings.json`, `api/tenants.json` and `api/keys.json`;
+`restore-module/40move_api` moves an older backup's files into `api/`.
 `restore-module/50call-configure-module` runs `configure-module` with no input, which keeps the
 restored settings and recreates the route. Restored keys keep working.
 

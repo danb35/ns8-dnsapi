@@ -10,9 +10,10 @@ The dnshelper side is in
 "Delegated access for an API module". Items marked **VERIFY** were not confirmed from the sources
 or on a node.
 
-Status: build order steps 1 to 7 are done (the service and its route; tenants, keys,
+Status: build order steps 1 to 8 are done (the service and its route; tenants, keys,
 authentication, rate limits and the read endpoints; the write endpoints; ACME DNS-01; the admin
-UI and the OpenAPI document; the full node test; the API host name in DNS). dnshelper's side, phase 1, is released in dnshelper 0.7.0 (2026-11-21), which this
+UI and the OpenAPI document; the full node test; the API host name in DNS; the hardening from the
+security review). dnshelper's side, phase 1, is released in dnshelper 0.7.0 (2026-11-21), which this
 module needs at least.
 
 Origin: forum request, community.nethserver.org topic 28774, posts 32-37 (2026-11-18/20). The
@@ -238,7 +239,23 @@ manages. `configure-module` then publishes it itself, so that the Let's Encrypt 
   loopback (Traefik).
 - **Brute force:** keys are random, so guessing is not the realistic risk, but failed
   authentications are still counted per source address and throttled (429 with `Retry-After`), and
-  logged.
+  logged. Decision (2026-11-21, security review): an IPv6 client is counted by its /64 network,
+  since one host usually has a whole /64 to rotate through; IPv4 by its address.
+- **HTTPS only** (decision 2026-11-21, security review): Traefik also serves the route over plain
+  HTTP, and with `http2https` off a client could send its key in the clear on every request. The
+  service refuses a request that Traefik received over plain HTTP (its `X-Forwarded-Proto` is not
+  `https`) with 403 `https_required`, whatever the setting, and logs the key id it carried so the
+  administrator can revoke a key that went over the network unencrypted. Requests without the
+  header come straight from the node (the systemd start check, local scripts) and are accepted.
+  Verified on the test node (2026-11-21): Traefik replaces a client's `X-Forwarded-Proto`, as
+  it does `X-Forwarded-For`. `http2https` cannot prevent the first cleartext request: the redirect comes
+  after the key was sent. Clients must use the `https://` URL.
+- **Concurrency limits** (decision 2026-11-21, security review): the service started a thread per
+  connection without limit, and a request waits up to 150 s for a DNS host. Now at most 64
+  connections are served at once (one more is answered 503 `busy` and closed), at most 4 requests
+  of one key are in progress at once (429 `too_many_concurrent`, `Retry-After: 5`), and at most 16
+  NS8 tasks run at once for the whole service (beyond that, a request waits up to 10 s for a
+  slot, then 503 `busy`). The per-key rate limit still applies on top.
 - **Rate limits** per key, configurable (`rate_limit`), default 60 per minute. They protect the
   DNS hosts' own limits, which are shared by every user of a credential (GoDaddy is about 60 per
   minute). Decision (2026-11-21): every dnshelper call counts, reads included, because a read is a
@@ -279,9 +296,44 @@ manages. `configure-module` then publishes it itself, so that the Let's Encrypt 
     for existing installs), so the actions stay the only writers. The service may make and revoke
     tenant keys only: `create-key` and `revoke-key` refuse operator keys when the caller is the
     module itself.
-  - The container runs with `--network=host` (the api-server is `127.0.0.1` on the leader node),
-    as the module's uid (`--userns=keep-id`), with the state directory mounted read-only and
-    `state/usage/` writable for the last-used times.
+  - The container runs with `--network=host`, as the module's uid (`--userns=keep-id`), with
+    `state/api/` mounted read-only (the files it reads) and `state/usage/` writable (last-used
+    times, activity). It has no NS8 credentials: see "The broker" below.
+- **The broker** (decision 2026-11-21, security review; replaces option 2 below). The process that
+  faces the internet no longer holds the module's NS8 identity. Those credentials (`agent.env`)
+  give the api-server identity `module/dnsapi1`: dnshelper's `dnswriter` on every zone its rules
+  grant, this module's own actions, Traefik's `routeadm` for every route on the node (so a
+  compromised service could have sent another application's host name, and its users' logins,
+  elsewhere) and `node:reader`, plus writes to the module's own Redis keys.
+  - A second container, `dnsapi-broker.service`, from the same image (`dnsapi-server broker`),
+    as restricted as the API container: the module's uid, no capabilities, read-only, host
+    network. It alone mounts `agent.env` (read-only; it reads only `REDIS_USER` and
+    `REDIS_PASSWORD`). It listens on a Unix socket (0600) in `%t/dnsapi-broker/`, the user's
+    runtime directory, which both containers mount. It reads the dnshelper instance from
+    `state/api/runtime.json`, written on the host by `bin/discover-runtime`, and runs tasks with
+    the standard-library api-server client the service had before.
+  - Why a container and not a host process under `runagent` (tried first, 2026-11-21): on a Rocky
+    node, SELinux does not let a container (`container_t`) connect to a socket of an unconfined
+    host process, without logging it; turning labelling off for the internet-facing container
+    would have given up a real layer. Container to container is allowed (tried with different
+    labels too). A loopback TCP port would have needed a second port (`update-module` records a
+    new `tcp-ports-demand` but allocates nothing; `node/allocate-ports` needs the `portsadm`
+    role) and a shared secret.
+  - One JSON request per connection, `{"target": "dnshelper" | "self", "action", "data"}`,
+    answered with the task's `{"exit_code", "output", "error"}`, or `{"refused"}` or
+    `{"unavailable"}`. It runs only an allowlist: on dnshelper, `list-zones`, `get-records`,
+    `list-owners`, `check-propagation`, and the four writes (`append-records`, `set-records`,
+    `delete-records`, `apply-changes`), which must carry `on_behalf_of`, so records written
+    through the API never get dnsapi as their owner; on this module, `add-tenant`,
+    `update-tenant`, `remove-tenant`, `assign-zone`, `unassign-zone`, `create-key` (never for the
+    operator) and `revoke-key`. It finds dnshelper itself (discovery), so the service no longer
+    needs to.
+  - A compromised service can then do what its API allows, and nothing else: no Traefik, no other
+    action of this module, no other module.
+  - Redis needs no credentials to read `cluster/*`, `node/*` and `module/*` (its `default` user,
+    checked on the test node), so the host network gives the container nothing the LAN does not;
+    it stays, because Traefik's connections then come from loopback, which `X-Forwarded-For`
+    handling relies on (through a published port they arrived from the node's LAN address).
 - **Calling dnshelper from a long-running process.** `agent.tasks.run()` logs in to the api-server
   (`http://cluster-leader:9311`, `POST /api/login`, then `/api/<agent>/tasks` and `/ws`) with
   `REDIS_USER` / `REDIS_PASSWORD` from the environment. For a rootless module those come from
@@ -294,8 +346,10 @@ manages. `configure-module` then publishes it itself, so that the Let's Encrypt 
   Either way, the process that faces the internet holds the module's api-server credentials.
   Splitting it into a front end without credentials and a local back end that holds them is
   possible, but probably not worth it in v1: the blast radius is the same dnswriter role.
+  (Superseded by the broker above: with `routeadm` and `node:reader` the blast radius was not the
+  same.)
 
-  Decision (2026-11-21): option 2. The protocol is three HTTP calls (login, `POST
+  Decision (2026-11-21): option 2, replaced by the broker the same day. The protocol is three HTTP calls (login, `POST
   /api/<agent>/tasks`, then `GET /api/<agent>/task/<id>/status` until it stops answering 400 or
   404), done with the standard library (`server/dnsapi_server/backend.py`), so the image needs no
   aiohttp and no copy of ns8-core's agent package. Verified on the test node: a container on the
@@ -331,10 +385,14 @@ manages. `configure-module` then publishes it itself, so that the Let's Encrypt 
   - `@any` grants `dnswriter` on every dnshelper instance. That gives no access by itself: each
     instance's policy is default deny until its administrator adds a rule for dnsapi.
   - With more than one dnshelper, dnsapi uses the one discovery finds first (open question 7).
-- State (all in `state-include.conf`): `state/tenants.json` (tenants and zone assignments),
-  `state/keys.json` (key ids, hashes, scopes, allowlists), `state/settings.json`; all mode 0600
-  and replaced atomically under a lock (`pypkg/dnsapi/state.py`). Not backed up, because they are
-  recomputed or unimportant: `state/runtime.json` and `state/usage/last-used.json`. Secrets are
+- State (all in `state-include.conf`): `state/api/tenants.json` (tenants and zone assignments),
+  `state/api/keys.json` (key ids, hashes, scopes, allowlists), `state/api/settings.json`; all mode
+  0600 and replaced atomically under a lock (`pypkg/dnsapi/state.py`). Not backed up, because they
+  are recomputed or unimportant: `state/api/runtime.json`, `state/host-record.json` and
+  `state/usage/`. The files the service reads are in `state/api/` (decision 2026-11-21, with the
+  broker) so that it can mount them without the rest of the state directory, where `agent.env`
+  and `apitoken.cache` are; `update-module.d` and `restore-module` move files from their earlier
+  place in `state/`. Secrets are
   never in `state/environment`. A restore brings keys back as they were, so restored keys keep
   working.
 - **No key secret is stored anywhere**, Redis included. Decision (2026-11-21): `create-key` takes
@@ -575,7 +633,44 @@ wraps the task events in one promise, as theirs do):
      render; the not-permitted notice now names the rule's name relative to the zone.
    - Not tested: the wait for the name servers before a real certificate, and the certificate
      itself, which need the node's host name to resolve publicly and port 80 to reach the node.
-8. Phase 2 (delegated zones), then phase 3 (PowerDNS hosting), as needed.
+8. Hardening from the security review: the broker (the service holds no NS8 credentials), HTTPS
+   only, concurrency limits, the IPv6 /64 throttle; the service's files moved to `state/api/`.
+   **Done** (2026-11-21):
+   - Unit tests: 67, including the broker's allowlist over its socket (allowed: dnshelper's reads
+     and its writes with `on_behalf_of`, the tenant and key actions; refused: writes without
+     `on_behalf_of`, `set-policy`, `add-zone`, `has-zone`, `configure-module`, operator keys,
+     Traefik, the node), the socket's mode 0600, `https_required`, the per-key, task and
+     connection caps, and the /64 throttle.
+   - Test node (Rocky 9, SELinux enforcing): `update-module` moved the four files into
+     `state/api/` and enabled the broker. Inside the API container: no `agent.env`, no `REDIS_`
+     variable, all capability sets empty, `NoNewPrivs` 1, mounts `state/api` (ro), `state/usage`
+     and the broker's directory only; the api-server refuses it (401). From inside it, the
+     broker ran `list-zones` and refused `set-policy`, a write without `on_behalf_of`,
+     `configure-module`, an operator key and Traefik's `set-route`. Through Traefik: adding a
+     tenant (through the broker) 201, the zones 200; plain HTTP 403 `https_required`, also with
+     a forged `X-Forwarded-Proto: https`, which Traefik replaces (the VERIFY item above), and the
+     key id logged; `/v1/status` over HTTP still 200.
+   - Found on the node and fixed: the first broker, a host process under `runagent`, could not be
+     reached from the container (SELinux; see The broker), so it is a container; a file moved
+     into `state/api/` by renaming kept a private SELinux label from an earlier mount and the
+     container could not read it, so the moves write new files.
+   - Restore: a restore runs the image recorded in the backup (`IMAGE_URL`), here `dnsapi:latest`,
+     the build before this step, so it came back with the old layout and old code; updating it
+     then moved its files and its restored tenants were served. `restore-module/40move_api`
+     covers restoring an old backup once `latest` is this code.
+   - Debian 13 node (node 2, AppArmor enabled, its own Traefik, dnshelper on node 3): an instance
+     installed from master with a tenant and an operator key, then `update-module` to this
+     branch: the four files moved into `state/api/`, both units enabled and active, the key made
+     before the update still worked. Inside the API container the same as on Rocky (no
+     `agent.env`, no `REDIS_` variable, empty capability sets, `NoNewPrivs` 1, the same three
+     mounts); from inside it the broker ran `list-zones` on dnshelper across nodes and refused
+     `set-policy`, `configure-module` and Traefik, and the api-server answered 401. Through
+     node 2's Traefik: a tenant added through the broker 201, the zones 200, plain HTTP 403
+     `https_required` (also with a forged `X-Forwarded-Proto`), `/v1/status` over HTTP 200. Podman
+     on that node applies no AppArmor profile to either container, so the socket needs no rule.
+   - Not tested on a node: the concurrency caps and the /64 throttle (unit tests only; the node
+     has no working IPv6).
+9. Phase 2 (delegated zones), then phase 3 (PowerDNS hosting), as needed.
 
 ## Open questions
 

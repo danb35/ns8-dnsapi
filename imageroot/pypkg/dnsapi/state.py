@@ -4,13 +4,14 @@
 #
 # The module state, as the actions read and write it (DESIGN.md, Module
 # plumbing). The API service (server/dnsapi_server/store.py) reads the same
-# files from a read-only mount; only the actions write them.
+# files from a read-only mount of state/api/, without the rest of state/
+# (agent.env, apitoken.cache); only the actions write them.
 #
-#   settings.json  {"host", "lets_encrypt", "http2https", "ip_allowlist", "rate_limit"}
-#   tenants.json   {"tenants": {"t1a2b3c4d": {"name", "enabled", "zones", "created"}}}
-#   keys.json      {"keys": {"a1b2c3d4": {"owner", "scope", "hash", "label",
+#   api/settings.json  {"host", "lets_encrypt", "http2https", "ip_allowlist", "rate_limit"}
+#   api/tenants.json   {"tenants": {"t1a2b3c4d": {"name", "enabled", "zones", "created"}}}
+#   api/keys.json      {"keys": {"a1b2c3d4": {"owner", "scope", "hash", "label",
 #                                         "allowlist", "expires", "created"}}}
-#   runtime.json   {"dnshelper": "module/dnshelper1" | null, "proxies_depth": 0}
+#   api/runtime.json   {"dnshelper": "module/dnshelper1" | null, "proxies_depth": 0}
 #                  (bin/discover-runtime; not backed up: it is recomputed)
 #   usage/last-used.json   written by the service
 #
@@ -26,6 +27,14 @@ import os
 import secrets
 import sys
 import tempfile
+
+API_DIR = "api"
+SETTINGS = os.path.join(API_DIR, "settings.json")
+TENANTS = os.path.join(API_DIR, "tenants.json")
+KEYS = os.path.join(API_DIR, "keys.json")
+RUNTIME = os.path.join(API_DIR, "runtime.json")
+# Where these files were before the broker (DESIGN.md, Module plumbing, State)
+LEGACY = {"settings.json": SETTINGS, "tenants.json": TENANTS, "keys.json": KEYS, "runtime.json": RUNTIME}
 
 SETTINGS_DEFAULTS = {
     "host": None,
@@ -69,13 +78,15 @@ def load(name, default):
 
 
 def save(name, data):
-    fd, tmp = tempfile.mkstemp(dir=state_dir(), prefix="." + name + ".")
+    target = path(name)
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(target), prefix="." + os.path.basename(name) + ".")
     try:
         with os.fdopen(fd, "w") as fp:
             json.dump(data, fp, indent=2, sort_keys=True)
             fp.write("\n")
         os.chmod(tmp, 0o600)
-        os.replace(tmp, path(name))
+        os.replace(tmp, target)
     except BaseException:
         with contextlib.suppress(FileNotFoundError):
             os.unlink(tmp)
@@ -83,23 +94,23 @@ def save(name, data):
 
 
 def load_settings():
-    return {**SETTINGS_DEFAULTS, **load("settings.json", {})}
+    return {**SETTINGS_DEFAULTS, **load(SETTINGS, {})}
 
 
 def tenants():
-    return load("tenants.json", {}).get("tenants", {})
+    return load(TENANTS, {}).get("tenants", {})
 
 
 def save_tenants(data):
-    save("tenants.json", {"tenants": data})
+    save(TENANTS, {"tenants": data})
 
 
 def keys():
-    return load("keys.json", {}).get("keys", {})
+    return load(KEYS, {}).get("keys", {})
 
 
 def save_keys(data):
-    save("keys.json", {"keys": data})
+    save(KEYS, {"keys": data})
 
 
 def last_used():

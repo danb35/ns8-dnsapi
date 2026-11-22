@@ -20,7 +20,7 @@ import time
 from http import HTTPStatus
 
 from . import keys as keyfmt
-from .backend import TaskFailed, TaskRefused, TaskTimeout, Unavailable
+from .backend import DnshelperMissing, TaskFailed, TaskRefused, TaskTimeout, Unavailable
 from .store import isoformat, parse_time
 
 log = logging.getLogger("dnsapi")
@@ -50,6 +50,11 @@ ERROR_STATUS = {
     "zone_not_assignable": HTTPStatus.CONFLICT,
     "auth_failed": HTTPStatus.BAD_GATEWAY,
 }
+
+# Concurrency limits (DESIGN.md, Security, Concurrency limits)
+MAX_TASKS = 16           # NS8 tasks in progress at once, for the whole service
+TASK_SLOT_WAIT = 10.0    # seconds a request waits for a task slot before 503 busy
+MAX_PER_KEY = 4          # requests of one key in progress at once
 
 ACME_LABEL = "_acme-challenge"
 ACME_TTL = 60  # a provider with a higher minimum raises it
@@ -134,6 +139,20 @@ def client_address(peer, forwarded_for, proxies_depth):
     return chain[index]
 
 
+def throttle_key(address):
+    """What failed authentications are counted by: an IPv4 address, or an IPv6 /64, since
+    one IPv6 host usually has a whole /64 to rotate through (DESIGN.md, Security)."""
+    try:
+        ip = ipaddress.ip_address(address)
+    except ValueError:
+        return address
+    if ip.version == 6:
+        if ip.ipv4_mapped:
+            return str(ip.ipv4_mapped)
+        return str(ipaddress.ip_network(f"{ip}/64", strict=False))
+    return str(ip)
+
+
 def address_allowed(address, allowlist):
     if not allowlist:
         return True
@@ -160,13 +179,17 @@ class Api:
         self.max_failures = max_failures
         self.clock = clock
         self.zones_cache = None  # (time, [zones])
+        self.task_slots = threading.BoundedSemaphore(MAX_TASKS)
+        self.in_flight = {}  # key id -> requests in progress
+        self.in_flight_lock = threading.Lock()
         self.zones_lock = threading.Lock()
         self.pool = concurrent.futures.ThreadPoolExecutor(max_workers=workers)
 
     # authentication
 
     def authenticate(self, req, authorization):
-        wait = self.failures.retry_after(req.client_ip, self.max_failures)
+        source = throttle_key(req.client_ip)
+        wait = self.failures.retry_after(source, self.max_failures)
         if wait:
             raise ApiError(HTTPStatus.TOO_MANY_REQUESTS, "rate_limited",
                            "Too many failed authentications", headers={"Retry-After": str(wait)})
@@ -185,7 +208,7 @@ class Api:
         key_id = keyfmt.parse_key(key) if scheme.lower() == "bearer" else None
         record = self.store.keys().get(key_id) if key_id else None
         if record is None or not keyfmt.hash_matches(key, record.get("hash")):
-            self.failures.hit(req.client_ip, 0)
+            self.failures.hit(source, 0)
             log.warning("authentication failed from %s (key id %s)", req.client_ip, key_id or "-")
             raise self._unauthorized("invalid_key", "The API key is not valid")
         expires = parse_time(record.get("expires"))
@@ -202,6 +225,27 @@ class Api:
                            "This key may not be used from this address")
         self.store.touch_key(key_id)
         req.principal = Principal(key_id, record, tenant)
+
+    def enter(self, req):
+        """Count a request of the key in progress; refuse beyond MAX_PER_KEY."""
+        key_id = req.principal.key_id
+        with self.in_flight_lock:
+            if self.in_flight.get(key_id, 0) >= MAX_PER_KEY:
+                raise ApiError(HTTPStatus.TOO_MANY_REQUESTS, "too_many_concurrent",
+                               f"At most {MAX_PER_KEY} requests of this key at once",
+                               headers={"Retry-After": "5"})
+            self.in_flight[key_id] = self.in_flight.get(key_id, 0) + 1
+
+    def leave(self, req):
+        if req.principal is None:
+            return
+        key_id = req.principal.key_id
+        with self.in_flight_lock:
+            count = self.in_flight.get(key_id, 0) - 1
+            if count > 0:
+                self.in_flight[key_id] = count
+            else:
+                self.in_flight.pop(key_id, None)
 
     @staticmethod
     def _unauthorized(code, message):
@@ -263,9 +307,15 @@ class Api:
                                f"At most {limit} DNS requests per minute for this key",
                                headers={"Retry-After": str(wait)})
 
-    def run_task(self, agent_id, action, data):
+    def run_task(self, target, action, data):
+        if not self.task_slots.acquire(timeout=TASK_SLOT_WAIT):
+            raise ApiError(HTTPStatus.SERVICE_UNAVAILABLE, "busy", "The service is busy; try again",
+                           headers={"Retry-After": "10"})
         try:
-            return self.backend.run(agent_id, action, data)
+            return self.backend.run(target, action, data)
+        except DnshelperMissing:
+            raise ApiError(HTTPStatus.SERVICE_UNAVAILABLE, "dnshelper_missing",
+                           "dnshelper is not installed", headers={"Retry-After": "300"})
         except TaskRefused as exc:
             first = exc.errors[0] if exc.errors else {}
             code = first.get("error") or "invalid_request"
@@ -285,17 +335,14 @@ class Api:
             log.error("%s", exc)
             raise ApiError(HTTPStatus.SERVICE_UNAVAILABLE, "unavailable",
                            "The DNS service is not available", headers={"Retry-After": "30"})
+        finally:
+            self.task_slots.release()
 
     def dnshelper(self, req, action, data):
-        try:
-            agent_id = self.backend.dnshelper_id()
-        except Unavailable:
-            raise ApiError(HTTPStatus.SERVICE_UNAVAILABLE, "dnshelper_missing",
-                           "dnshelper is not installed", headers={"Retry-After": "300"})
-        return self.run_task(agent_id, action, data)
+        return self.run_task("dnshelper", action, data)
 
     def own_action(self, action, data):
-        output = self.run_task(self.backend.agent_id(), action, data)
+        output = self.run_task("self", action, data)
         self.store.invalidate()
         return output
 

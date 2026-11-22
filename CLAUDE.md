@@ -55,6 +55,13 @@ in CI may talk to a real service. It has failed for reasons unrelated to the cod
 right after the VM starts; NS8's cluster setup failing to pull its `metrics` module): re-run before
 suspecting the module, and read the failing step with `gh run view --job <id> --log`.
 
+Releases are listed in danb35/ns8-repomd (`dnsapi/` there holds the logo and screenshots).
+`notify-repomd.yml` (copied from ns8-powerdns) asks it to rebuild once a release tag's images
+are published; it needs the repository secret `REPOMD_DISPATCH_TOKEN`, a fine-grained token for
+danb35/ns8-repomd with "Contents: read and write". Without it the workflow only warns, and
+ns8-repomd picks the release up at its next scheduled build (every six hours). `workflow_run`
+workflows run from the default branch, so a change to it takes effect once merged.
+
 Image tags: every pushed branch or tag publishes `ghcr.io/danb35/dnsapi:<ref>` with `/` replaced by
 `-`; `master` also updates `latest`. Release tags are plain semver without a `v` (for example
 `0.1.0`), annotated, on a commit whose checks all passed.

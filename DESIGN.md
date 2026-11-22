@@ -238,7 +238,23 @@ manages. `configure-module` then publishes it itself, so that the Let's Encrypt 
   loopback (Traefik).
 - **Brute force:** keys are random, so guessing is not the realistic risk, but failed
   authentications are still counted per source address and throttled (429 with `Retry-After`), and
-  logged.
+  logged. Decision (2026-11-21, security review): an IPv6 client is counted by its /64 network,
+  since one host usually has a whole /64 to rotate through; IPv4 by its address.
+- **HTTPS only** (decision 2026-11-21, security review): Traefik also serves the route over plain
+  HTTP, and with `http2https` off a client could send its key in the clear on every request. The
+  service refuses a request that Traefik received over plain HTTP (its `X-Forwarded-Proto` is not
+  `https`) with 403 `https_required`, whatever the setting, and logs the key id it carried so the
+  administrator can revoke a key that went over the network unencrypted. Requests without the
+  header come straight from the node (the systemd start check, local scripts) and are accepted.
+  **VERIFY** on a node that Traefik replaces a client's `X-Forwarded-Proto`, as it does
+  `X-Forwarded-For`. `http2https` cannot prevent the first cleartext request: the redirect comes
+  after the key was sent. Clients must use the `https://` URL.
+- **Concurrency limits** (decision 2026-11-21, security review): the service started a thread per
+  connection without limit, and a request waits up to 150 s for a DNS host. Now at most 64
+  connections are served at once (one more is answered 503 `busy` and closed), at most 4 requests
+  of one key are in progress at once (429 `too_many_concurrent`, `Retry-After: 5`), and at most 16
+  NS8 tasks run at once for the whole service (beyond that, a request waits up to 10 s for a
+  slot, then 503 `busy`). The per-key rate limit still applies on top.
 - **Rate limits** per key, configurable (`rate_limit`), default 60 per minute. They protect the
   DNS hosts' own limits, which are shared by every user of a credential (GoDaddy is about 60 per
   minute). Decision (2026-11-21): every dnshelper call counts, reads included, because a read is a
@@ -279,9 +295,34 @@ manages. `configure-module` then publishes it itself, so that the Let's Encrypt 
     for existing installs), so the actions stay the only writers. The service may make and revoke
     tenant keys only: `create-key` and `revoke-key` refuse operator keys when the caller is the
     module itself.
-  - The container runs with `--network=host` (the api-server is `127.0.0.1` on the leader node),
-    as the module's uid (`--userns=keep-id`), with the state directory mounted read-only and
-    `state/usage/` writable for the last-used times.
+  - The container runs with `--network=host`, as the module's uid (`--userns=keep-id`), with
+    `state/api/` mounted read-only (the files it reads) and `state/usage/` writable (last-used
+    times, activity). It has no NS8 credentials: see "The broker" below.
+- **The broker** (decision 2026-11-21, security review; replaces option 2 below). The process that
+  faces the internet no longer holds the module's NS8 identity. Those credentials (`agent.env`)
+  give the api-server identity `module/dnsapi1`: dnshelper's `dnswriter` on every zone its rules
+  grant, this module's own actions, Traefik's `routeadm` for every route on the node (so a
+  compromised service could have sent another application's host name, and its users' logins,
+  elsewhere) and `node:reader`, plus writes to the module's own Redis keys.
+  - A second user unit, `dnsapi-broker.service`, runs on the host as the module's user under
+    `runagent`, with ns8-core's `agent` package. It listens on a Unix socket in
+    `%t/dnsapi-broker/` (the user's runtime directory, not the state directory), the only path the
+    container mounts besides `state/api/` and `state/usage/`.
+  - One JSON request per connection, `{"target": "dnshelper" | "self", "action", "data"}`,
+    answered with the task's `{"exit_code", "output", "error"}`, or `{"refused"}` or
+    `{"unavailable"}`. It runs only an allowlist: on dnshelper, `list-zones`, `get-records`,
+    `list-owners`, `check-propagation`, and the four writes (`append-records`, `set-records`,
+    `delete-records`, `apply-changes`), which must carry `on_behalf_of`, so records written
+    through the API never get dnsapi as their owner; on this module, `add-tenant`,
+    `update-tenant`, `remove-tenant`, `assign-zone`, `unassign-zone`, `create-key` (never for the
+    operator) and `revoke-key`. It finds dnshelper itself (discovery), so the service no longer
+    needs to.
+  - A compromised service can then do what its API allows, and nothing else: no Traefik, no other
+    action of this module, no other module.
+  - Redis needs no credentials to read `cluster/*`, `node/*` and `module/*` (its `default` user,
+    checked on the test node), so the host network gives the container nothing the LAN does not;
+    it stays, because Traefik's connections then come from loopback, which `X-Forwarded-For`
+    handling relies on (through a published port they arrived from the node's LAN address).
 - **Calling dnshelper from a long-running process.** `agent.tasks.run()` logs in to the api-server
   (`http://cluster-leader:9311`, `POST /api/login`, then `/api/<agent>/tasks` and `/ws`) with
   `REDIS_USER` / `REDIS_PASSWORD` from the environment. For a rootless module those come from
@@ -294,8 +335,10 @@ manages. `configure-module` then publishes it itself, so that the Let's Encrypt 
   Either way, the process that faces the internet holds the module's api-server credentials.
   Splitting it into a front end without credentials and a local back end that holds them is
   possible, but probably not worth it in v1: the blast radius is the same dnswriter role.
+  (Superseded by the broker above: with `routeadm` and `node:reader` the blast radius was not the
+  same.)
 
-  Decision (2026-11-21): option 2. The protocol is three HTTP calls (login, `POST
+  Decision (2026-11-21): option 2, replaced by the broker the same day. The protocol is three HTTP calls (login, `POST
   /api/<agent>/tasks`, then `GET /api/<agent>/task/<id>/status` until it stops answering 400 or
   404), done with the standard library (`server/dnsapi_server/backend.py`), so the image needs no
   aiohttp and no copy of ns8-core's agent package. Verified on the test node: a container on the
@@ -331,10 +374,14 @@ manages. `configure-module` then publishes it itself, so that the Let's Encrypt 
   - `@any` grants `dnswriter` on every dnshelper instance. That gives no access by itself: each
     instance's policy is default deny until its administrator adds a rule for dnsapi.
   - With more than one dnshelper, dnsapi uses the one discovery finds first (open question 7).
-- State (all in `state-include.conf`): `state/tenants.json` (tenants and zone assignments),
-  `state/keys.json` (key ids, hashes, scopes, allowlists), `state/settings.json`; all mode 0600
-  and replaced atomically under a lock (`pypkg/dnsapi/state.py`). Not backed up, because they are
-  recomputed or unimportant: `state/runtime.json` and `state/usage/last-used.json`. Secrets are
+- State (all in `state-include.conf`): `state/api/tenants.json` (tenants and zone assignments),
+  `state/api/keys.json` (key ids, hashes, scopes, allowlists), `state/api/settings.json`; all mode
+  0600 and replaced atomically under a lock (`pypkg/dnsapi/state.py`). Not backed up, because they
+  are recomputed or unimportant: `state/api/runtime.json`, `state/host-record.json` and
+  `state/usage/`. The files the service reads are in `state/api/` (decision 2026-11-21, with the
+  broker) so that it can mount them without the rest of the state directory, where `agent.env`
+  and `apitoken.cache` are; `update-module.d` and `restore-module` move files from their earlier
+  place in `state/`. Secrets are
   never in `state/environment`. A restore brings keys back as they were, so restored keys keep
   working.
 - **No key secret is stored anywhere**, Redis included. Decision (2026-11-21): `create-key` takes
@@ -575,7 +622,9 @@ wraps the task events in one promise, as theirs do):
      render; the not-permitted notice now names the rule's name relative to the zone.
    - Not tested: the wait for the name servers before a real certificate, and the certificate
      itself, which need the node's host name to resolve publicly and port 80 to reach the node.
-8. Phase 2 (delegated zones), then phase 3 (PowerDNS hosting), as needed.
+8. Hardening from the security review: the broker (the service holds no NS8 credentials), HTTPS
+   only, concurrency limits, the IPv6 /64 throttle; the service's files moved to `state/api/`.
+9. Phase 2 (delegated zones), then phase 3 (PowerDNS hosting), as needed.
 
 ## Open questions
 

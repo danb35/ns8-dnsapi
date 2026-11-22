@@ -12,7 +12,12 @@
 #
 # set-route runs before the settings are saved: when Traefik refuses them
 # (an address it can't parse, a Let's Encrypt certificate it can't get),
-# the action fails with nothing changed.
+# the action fails with the settings unchanged.
+#
+# Before set-route, when publish_host_record is on and the host name is in a
+# zone dnshelper manages, its CNAME to the node is added if missing (DESIGN.md,
+# The API host name in DNS), so the certificate can be issued. That step never
+# fails the action; its result goes to state/host-record.json.
 #
 
 import ipaddress
@@ -23,8 +28,12 @@ import sys
 import agent
 import agent.tasks
 
+sys.path.insert(0, os.path.join(os.environ["AGENT_INSTALL_DIR"], "pypkg"))
+from dnsapi import dnshelper, hostrecord
+
 SETTINGS = "settings.json"
-DEFAULTS = {"host": None, "lets_encrypt": False, "http2https": True, "ip_allowlist": [], "rate_limit": 60}
+DEFAULTS = {"host": None, "lets_encrypt": False, "http2https": True, "ip_allowlist": [], "rate_limit": 60,
+            "publish_host_record": True}
 
 
 def validation_failed(field, value, error):
@@ -54,6 +63,25 @@ for value in settings["ip_allowlist"]:
         ipaddress.ip_network(value, strict=False)
     except ValueError:
         validation_failed("ip_allowlist", value, "bad_ip_address")
+
+# The host name's CNAME to the node, through dnshelper
+if settings["publish_host_record"]:
+    rdb = agent.redis_connect(use_replica=True)
+    target = dnshelper.find_instance(rdb)
+    if target is None:
+        record = {"host": settings["host"], "status": "error", "message": "dnshelper is not installed"}
+    else:
+        try:
+            fqdn = hostrecord.node_fqdn()
+            record = hostrecord.ensure(settings["host"], fqdn,
+                                       lambda action, data: dnshelper.call(target, action, data),
+                                       wait=settings["lets_encrypt"])
+        except Exception as exc:
+            record = {"host": settings["host"], "status": "error", "message": str(exc)}
+else:
+    record = {"host": settings["host"], "status": "disabled"}
+print(f"API host record: {record['status']} {record.get('message', '')}", file=sys.stderr)
+hostrecord.save(record)
 
 response = agent.tasks.run(
     agent_id=agent.resolve_agent_id("traefik@node"),

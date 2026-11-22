@@ -142,6 +142,44 @@ export default {
       return { id, key, hash: hex(new Uint8Array(digest)) };
     },
 
+    /** A notice for the host name's DNS record (get-configuration's host_record), or null. */
+    hostRecordStatus(record) {
+      if (!record || record.status === "disabled") {
+        return null;
+      }
+      const kinds = {
+        ok: "success",
+        created: "success",
+        conflict: "warning",
+        not_managed: "info",
+        not_permitted: "info",
+        apex: "info",
+        error: "warning",
+      };
+      const zone = record.zone || "";
+      const host = record.host || "";
+      const params = {
+        host,
+        // the host name relative to its zone, as dnshelper's rules name it
+        name:
+          zone && host.endsWith("." + zone)
+            ? host.slice(0, -zone.length - 1)
+            : host,
+        target: record.target || "",
+        zone,
+        existing: (record.existing || []).join(", "),
+        message: record.message || "",
+      };
+      return {
+        kind: kinds[record.status] || "info",
+        title: this.$t("host_record.title_" + record.status, params),
+        description: this.$t(
+          "host_record.description_" + record.status,
+          params
+        ),
+      };
+    },
+
     tenantName(tenants, owner) {
       if (owner === "operator") {
         return this.$t("keys.operator");

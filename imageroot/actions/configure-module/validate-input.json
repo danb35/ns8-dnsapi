@@ -12,7 +12,8 @@
                 "203.0.113.10",
                 "198.51.100.0/24"
             ],
-            "rate_limit": 60
+            "rate_limit": 60,
+            "publish_host_record": true
         },
         {
             "ip_allowlist": []
@@ -57,6 +58,11 @@
             "maximum": 10000,
             "title": "Rate limit",
             "description": "DNS requests per minute for each API key: every request that calls dnshelper counts, reads included, because the DNS hosts' own limits count them too. Default 60."
+        },
+        "publish_host_record": {
+            "type": "boolean",
+            "title": "Publish the host name in DNS",
+            "description": "When the host name is in a zone dnshelper manages and its rules let dnsapi write it, add a CNAME from the host name to this node if there is none. Another record at the name is never changed. Default true."
         }
     }
 }

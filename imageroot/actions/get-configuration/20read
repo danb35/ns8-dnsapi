@@ -8,12 +8,21 @@
 import json
 import sys
 
-DEFAULTS = {"host": None, "lets_encrypt": False, "http2https": True, "ip_allowlist": [], "rate_limit": 60}
+DEFAULTS = {"host": None, "lets_encrypt": False, "http2https": True, "ip_allowlist": [], "rate_limit": 60,
+            "publish_host_record": True}
 
-try:
-    with open("settings.json") as fp:
-        settings = {**DEFAULTS, **json.load(fp)}
-except FileNotFoundError:
-    settings = dict(DEFAULTS)
 
-json.dump({key: settings[key] for key in DEFAULTS}, fp=sys.stdout)
+def load(name, default):
+    try:
+        with open(name) as fp:
+            return json.load(fp)
+    except FileNotFoundError:
+        return default
+
+
+settings = {**DEFAULTS, **load("settings.json", {})}
+output = {key: settings[key] for key in DEFAULTS}
+# What configure-module found about the host name's DNS record (DESIGN.md,
+# The API host name in DNS); null until it has run
+output["host_record"] = load("host-record.json", None)
+json.dump(output, fp=sys.stdout)

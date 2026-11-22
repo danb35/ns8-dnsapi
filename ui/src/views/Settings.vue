@@ -79,6 +79,27 @@
               class="mg-bottom"
               ref="rate_limit"
             />
+            <NsToggle
+              value="publishHostRecord"
+              :label="$t('settings.publish_host_record')"
+              v-model="publishHostRecord"
+              :disabled="stillLoading"
+              class="mg-bottom"
+            >
+              <template #tooltip>{{
+                $t("settings.publish_host_record_tooltip")
+              }}</template>
+              <template slot="text-left">{{ $t("common.disabled") }}</template>
+              <template slot="text-right">{{ $t("common.enabled") }}</template>
+            </NsToggle>
+            <NsInlineNotification
+              v-if="hostRecordNotice"
+              :kind="hostRecordNotice.kind"
+              :title="hostRecordNotice.title"
+              :description="hostRecordNotice.description"
+              :showCloseButton="false"
+              class="mg-bottom"
+            />
             <cv-row v-if="error.configureModule">
               <cv-column>
                 <NsInlineNotification
@@ -106,6 +127,7 @@
 <script>
 import to from "await-to-js";
 import { mapState } from "vuex";
+import DnsapiService from "../mixins/dnsapi";
 import {
   QueryParamService,
   UtilService,
@@ -117,6 +139,7 @@ import {
 export default {
   name: "Settings",
   mixins: [
+    DnsapiService,
     TaskService,
     IconService,
     UtilService,
@@ -137,6 +160,8 @@ export default {
       isHttpToHttpsEnabled: true,
       ipAllowlist: "",
       rateLimit: 60,
+      publishHostRecord: true,
+      hostRecord: null,
       loading: {
         getConfiguration: false,
         configureModule: false,
@@ -153,6 +178,9 @@ export default {
   },
   computed: {
     ...mapState(["instanceName", "core", "appName"]),
+    hostRecordNotice() {
+      return this.hostRecordStatus(this.hostRecord);
+    },
     stillLoading() {
       return this.loading.getConfiguration || this.loading.configureModule;
     },
@@ -228,6 +256,8 @@ export default {
       this.isHttpToHttpsEnabled = config.http2https;
       this.ipAllowlist = config.ip_allowlist.join("\n");
       this.rateLimit = config.rate_limit;
+      this.publishHostRecord = config.publish_host_record;
+      this.hostRecord = config.host_record;
       this.focusElement("host");
     },
     validateConfigureModule() {
@@ -310,6 +340,7 @@ export default {
             http2https: this.isHttpToHttpsEnabled,
             ip_allowlist: [...new Set(this.ipAllowlistEntries)],
             rate_limit: this.rateLimit,
+            publish_host_record: this.publishHostRecord,
           },
           extra: {
             title: this.$t("settings.configure_instance", {

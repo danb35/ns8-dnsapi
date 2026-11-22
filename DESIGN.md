@@ -139,7 +139,8 @@ make it safe and easy:
      operator does not hand a hosting customer a zone they can only partly change.
 3. **Endpoints for existing ACME clients.** `POST /v1/acme/present` and `POST /v1/acme/cleanup`
    with `{"fqdn": "_acme-challenge.www.example.com.", "value": "<token>"}`, which is what lego's
-   `httpreq` provider (lego is also inside Traefik and Caddy) and acme.sh's `acmeproxy` send. The
+   `httpreq` provider (lego is also inside Traefik), acme.sh's `acmeproxy` and Caddy's `acmeproxy`
+   DNS module send. The
    client is configured with `https://<dnsapi host>/v1/acme` as its endpoint and the key as its
    password.
    - The fully qualified name must start with the label `_acme-challenge`. The zone is the
@@ -162,6 +163,12 @@ make it safe and easy:
      - acme.sh appends the trailing dot itself and counts the call as done only when the reply
        contains the value in quotes, so both endpoints answer with `{"fqdn", "value", "zone",
        "changes"}`.
+     - Caddy (checked 2026-11-22 against `caddy-dns/acmeproxy` v1.1.1 and the
+       `libdns/acmeproxy` it uses, not run): Caddy does not use lego; its DNS modules are libdns
+       providers, and the `acmeproxy` one, which standard Caddy builds do not include, sends the
+       same requests, with `fqdn` built by `libdns.AbsoluteName` (trailing dot), and Basic
+       authentication when a user name or password is set. It accepts only 200, and only a JSON
+       reply whose `fqdn` and `value` equal what it sent, so both endpoints echo them as received.
    - certbot has no such plugin: the user guide shows `--manual-auth-hook` and
      `--manual-cleanup-hook` scripts that call the REST API with curl.
 
@@ -449,6 +456,11 @@ wraps the task events in one promise, as theirs do):
   itself, so an API change is not listed twice), each trimmed to recent entries and not backed up.
   An entry names the acting key; a key the operator made or revoked is `target_key`.
 - **Settings**: the template's fields plus `rate_limit`.
+- **Screenshots** (2026-11-22): `ui/dev/` runs the built UI in a browser with faked actions, as
+  ns8-automx's and ns8-dnshelper's do, and `screenshots.js` takes the user guide's pictures.
+  Fixed from what they showed: a key's expiry, set as the start of a day in UTC, was shown in
+  local time, so a day early west of Greenwich (now the UTC day); the "Some records" tag sat
+  under its zone; long record values on the Activity page broke after every character.
 
 ## Build order
 
@@ -671,6 +683,43 @@ wraps the task events in one promise, as theirs do):
    - Not tested on a node: the concurrency caps and the /64 throttle (unit tests only; the node
      has no working IPv6).
 9. Phase 2 (delegated zones), then phase 3 (PowerDNS hosting), as needed.
+
+## Further hardening (not built)
+
+The security review of 2026-11-21 listed ten items; four were built in step 8 (the broker, HTTPS
+only, concurrency limits, the IPv6 /64 throttle). The rest, kept here for later:
+
+1. **Tenant isolation depends on dnsapi's own check.** For a zone under dnshelper's "API module
+   (all records)" preset, dnshelper allows dnsapi every record, so a bug in dnsapi's tenant check
+   is the only thing between two customers; dnshelper protects only the zones it did not grant.
+   - A test that runs every route and method with every kind of key (operator, tenant, read,
+     write, restricted, expired, disabled tenant) against every kind of zone (own, another
+     tenant's, unassigned, not granted, partial) and checks each answer against a table.
+   - The operator key reaches every customer. The UI could warn when an operator key has no
+     allowed addresses, or require them.
+2. **Container limits.** Both containers already run read-only, as the module's uid, with no
+   capabilities and `no-new-privileges`. Not set: memory and process-count limits (`--memory`,
+   `--pids-limit`). The host network stays (see The broker: it is what makes Traefik's
+   connections come from loopback).
+3. **A request limit in Traefik.** The service caps connections, requests per key and tasks
+   (step 8), but every connection still reaches it. A Traefik rate-limit middleware on the route
+   would refuse floods before they do; ns8-traefik's `set-route` has no such option, so this
+   needs a change there.
+4. **Input checks of dnsapi's own.** dnsapi passes record names and values to dnshelper, which
+   validates them. dnsapi could also refuse control characters and newlines, and cap the nesting
+   depth of JSON bodies, before anything reaches dnshelper or the logs.
+5. **Every host name served by the cluster could be reserved.** Only the API's own host name and
+   its `_acme-challenge` name are reserved now. If another name served on the cluster (the node's
+   host name, webmail, other applications) is in a zone assigned to a tenant, that tenant can
+   repoint it or obtain a certificate for it. dnsapi could treat every host name in Traefik's
+   routes as reserved (needs read access to the routes of every node).
+6. **The audit trail to trust.** A compromised API service could rewrite
+   `state/usage/activity.jsonl`, and so the Activity page. The journal lines and dnshelper's own
+   audit log are out of its reach. The user guide says so (2026-11-22); nothing else is done.
+7. **Updates of the service image.** It pins `python:3.14.10-slim-trixie`; Renovate's
+   `dockerfile` manager reads `server/Containerfile` (dnshelper gets its Go image updates that
+   way), so a new Python image becomes a PR, but only once Renovate runs on this repository.
+   The Trivy scan in `publish-images.yml` runs only for stable releases and by hand.
 
 ## Open questions
 

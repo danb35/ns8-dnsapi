@@ -6,7 +6,8 @@ own) acting for the operator's customers, customers' own scripts, and systems th
 certificates with ACME DNS-01, including ones the internet cannot reach. It holds no DNS provider
 code: every read and change goes through [ns8-dnshelper](https://github.com/danb35/ns8-dnshelper)
 (0.7.0 or later), limited by the access rules its administrator grants this module. See
-[DESIGN.md](DESIGN.md) for the design, the decisions and what was tested on a node.
+[DESIGN.md](DESIGN.md) for the design, the decisions and what was tested on a node, and
+[TERMS.md](TERMS.md) for what data goes where.
 
 **Administering it?** The [user guide](docs/USER-GUIDE.md) explains publishing the API, letting
 it use zones, tenants and keys, connecting a portal, setting up ACME clients, and what the errors
@@ -27,14 +28,21 @@ client for its API.
 
 ## Status
 
-Not released yet. Steps 1 to 5 of DESIGN.md's build order are done: the API behind Traefik on its
+Not released yet. Steps 1 to 8 of DESIGN.md's build order are done: the API behind Traefik on its
 own host name; tenants, keys, authentication and rate limits; reading and changing records; ACME
-DNS-01; the admin UI (Status, Tenants, Keys, Activity, Settings) and the OpenAPI document.
+DNS-01; the admin UI (Status, Tenants, Keys, Activity, Settings) and the OpenAPI document; a full
+node test; the API's host name published through dnshelper; and the hardening from a security
+review (the broker, HTTPS only, concurrency limits). Phase 2 (adding zones through the API) is not
+built. Hardening that was considered and not built is listed in DESIGN.md, "Further hardening".
 
 ## Install
 
+dnshelper 0.7.0 or later must be installed for dnsapi to reach any zone (NS8 has no dependencies
+between modules, so this is not enforced at install).
+
     add-module ghcr.io/danb35/dnsapi:latest 1
     api-cli run module/dnsapi1/configure-module --data '{"host": "dnsapi.example.com", "lets_encrypt": true}'
+    runagent -m dnsapi1 create-key --owner operator --scope write --label "first key"
 
 The user guide has the details. To remove an instance: `remove-module --no-preserve dnsapi1`.
 
@@ -60,9 +68,10 @@ is how the first operator key is made. The API service calls the tenant and key 
 
 ## API
 
-Base URL `https://<host>/v1`; plain HTTP is refused, and a key sent over it should be revoked. The OpenAPI 3.1 document is at `/v1/openapi.json`, without a key
-(`server/make_openapi.py` writes it; a unit test checks that it describes every route). Send the key as `Authorization: Bearer <key>`; keys look like
-`dnsapi_<8 hex>_<52 base32>`. Bodies are JSON, at most 1 MB. A read key may only `GET`. Errors
+Base URL `https://<host>/v1`; plain HTTP is refused, and a key sent over it should be revoked.
+The OpenAPI 3.1 document is at `/v1/openapi.json`, without a key (`server/make_openapi.py` writes
+it; a unit test checks that it describes every route). Send the key as `Authorization: Bearer
+<key>`; keys look like `dnsapi_<8 hex>_<52 base32>`. Bodies are JSON, at most 1 MB. A read key may only `GET`. Errors
 are `{"error": {"code", "message", "field"}}`:
 
 | Status | Codes |
@@ -71,10 +80,13 @@ are `{"error": {"code", "message", "field"}}`:
 | 401 | `missing_key`, `invalid_key`, `key_expired` |
 | 403 | `insufficient_scope`, `tenant_disabled`, `address_not_allowed`, `restricted_key`, `outside_restriction`, `reserved_name` (the API's own host name and its `_acme-challenge`), `https_required` (the request came over plain HTTP); dnshelper's `not_permitted`, `forbidden` (apex NS, SOA) |
 | 404 | `not_found`, `zone_not_found`, `tenant_not_found`, `key_not_found` |
-| 409 | `stale` (a record to remove is gone), `conflict` (e.g. a CNAME beside other records), `zone_assigned` |
+| 405 | `method_not_allowed` |
+| 409 | `stale` (a record to remove is gone), `conflict` (e.g. a CNAME beside other records), `zone_assigned` (another tenant has the zone), `zone_not_assignable` (dnshelper does not let dnsapi write in it) |
 | 413 | `body_too_large` |
 | 429 | `rate_limited`, `too_many_concurrent` (more than 4 requests of one key at once), with `Retry-After` |
-| 502, 503, 504 | `upstream_error` (the DNS host failed), `dnshelper_missing`, `unavailable` or `busy` (too many requests at once for the whole service), `upstream_timeout` |
+| 502 | `upstream_error` (the DNS host failed), dnshelper's `auth_failed` (the DNS host refused its credentials) |
+| 503 | `dnshelper_missing`, `unavailable`, `busy` (too many requests at once for the whole service) |
+| 504 | `upstream_timeout` |
 
 A tenant key gets 404, not 403, for a zone it does not own and for the operator endpoints, so a
 key cannot be used to find out which zones are managed.
@@ -132,8 +144,8 @@ twice).
 ## ACME endpoints
 
 `POST /v1/acme/present` and `POST /v1/acme/cleanup` take `{"fqdn": "_acme-challenge.www.example.com.",
-"value": "<token>"}`: the protocol of lego's `httpreq` provider and acme.sh's `acmeproxy`
-(checked against their sources, see DESIGN.md). They accept HTTP Basic authentication with the
+"value": "<token>"}`: the protocol of lego's `httpreq` provider, acme.sh's `acmeproxy` and
+Caddy's `acmeproxy` DNS module (checked against their sources, see DESIGN.md). They accept HTTP Basic authentication with the
 key as the password and any user name, as those clients send it; nowhere else does.
 
 - The `fqdn` must start with the label `_acme-challenge`; the trailing dot is optional. The zone
@@ -141,11 +153,13 @@ key as the password and any user name, as those clients send it; nowhere else do
 - `present` adds the TXT value with a TTL of 60 and keeps any other value at that name;
   `cleanup` removes only that value. They run as any other change (write scope, `restrict`, rate
   limit, audit line).
-- The answer is `{"fqdn", "value", "zone", "changes"}`: acme.sh needs the value echoed.
+- The answer is 200 with `{"fqdn", "value", "zone", "changes"}`, `fqdn` and `value` exactly as
+  sent: acme.sh needs the value echoed, and Caddy's module refuses any other status or a changed
+  `fqdn` or `value`.
 - lego's `RAW` mode is not supported. A CNAME on `_acme-challenge` pointing to a name that does
   not start with `_acme-challenge` is refused (lego sends the CNAME's target).
 
-The user guide shows the lego, acme.sh and certbot setups.
+The user guide shows the lego, acme.sh, Caddy and certbot setups.
 
 ## Writing a portal integration
 
@@ -179,7 +193,7 @@ history names the tenant.
 
 ## How it fits together
 
-- **Two images.** `dnsapi` is the NS8 module (actions, systemd unit, UI); `dnsapi-server`
+- **Two images.** `dnsapi` is the NS8 module (actions, systemd units, UI); `dnsapi-server`
   (`server/Containerfile`) is the API service, Python standard library only. They are published
   together with the same tag.
 - **The service** runs rootless with `--network=host`, listens on `127.0.0.1:${TCP_PORT}`, and
@@ -212,7 +226,8 @@ history names the tenant.
 - **The client address** is the last `X-Forwarded-For` entry, or `PROXIES_DEPTH` entries left of
   it when Traefik has trusted proxies. Traefik replaces a header a client sends itself.
 - **Events**: `service-dnshelper-changed`, `module-added` and `module-removed` rerun discovery;
-  the first also drops assignments of zones dnsapi may no longer write in.
+  the first also drops assignments of zones dnshelper no longer manages. A zone dnsapi may merely
+  not write in right now is kept: after a restore, dnshelper's rules still name the old instance.
 - **Route**: `configure-module` calls Traefik's `set-route` with the instance name `MODULE_ID`,
   before saving anything; ns8-traefik removes the route with the module.
 - **The host name's record** (`pypkg/dnsapi/hostrecord.py`): before `set-route`, `has-zone` with
@@ -248,9 +263,13 @@ restored settings and recreates the route. Restored keys keep working.
 
 - `server/`: the API service and its tests. `cd server && python3 -m unittest discover -s tests`
   runs them; `build-images.sh` runs them inside the built image too.
-- `imageroot/`: actions, `bin/`, events, `pypkg/dnsapi/`, the systemd unit and the update hooks.
-- `ui/`: the admin UI (Vue 2, ns8-ui-lib), translated with
-  [Weblate](https://hosted.weblate.org/projects/ns8/).
+- `imageroot/`: actions, `bin/`, events, `pypkg/dnsapi/`, the systemd units and the update hooks.
+- `ui/`: the admin UI (Vue 2, ns8-ui-lib). Only English is translated
+  (`ui/public/i18n/en/translation.json`); the other languages hold only the template's strings
+  and fall back to English. `ui/dev/` is a harness that runs the built UI in a browser with
+  faked module data, and takes the user guide's screenshots (`ui/dev/README.md`).
+- The logo is `ui/src/assets/module_default_logo.png`, rendered at 256×256 from
+  `module_default_logo.svg` beside it.
 
 ## Testing
 

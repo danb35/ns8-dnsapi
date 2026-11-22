@@ -693,6 +693,7 @@ class ApiTest(unittest.TestCase):
         msg = {"fqdn": "_acme-challenge.www.acme.test.", "value": "LHDhK3oGRvkiefQnx7OOczTY5Tic_xZ6HcMOc_gmtoM"}
         resp, body = self.request("POST", "/v1/acme/present", headers=self.basic("acme_host"), body=msg)
         self.assertEqual(resp.status, 200, body)
+        # Caddy's acmeproxy module needs exactly 200, and fqdn and value echoed as sent
         self.assertEqual((body["fqdn"], body["value"], body["zone"]), (msg["fqdn"], msg["value"], "acme.test"))
         agent_id, action, data = self.writes()[-1]
         self.assertEqual(action, "append-records")

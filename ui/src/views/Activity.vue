@@ -189,7 +189,10 @@ export default {
       this.loading.load = false;
     },
     formatTime(iso) {
-      return new Date(iso).toLocaleString();
+      return new Date(iso).toLocaleString(undefined, {
+        dateStyle: "short",
+        timeStyle: "short",
+      });
     },
     who(row) {
       const owner = this.tenantName(this.tenants, row.owner);
@@ -253,10 +256,12 @@ export default {
   white-space: nowrap;
 }
 
+// Long values (TXT records) wrap, but only where they must.
 .change {
   font-family: "IBM Plex Mono", "Menlo", "Courier New", monospace;
   font-size: 0.75rem;
-  word-break: break-all;
+  min-width: 12rem;
+  overflow-wrap: anywhere;
 }
 
 .add {

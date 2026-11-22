@@ -3,16 +3,20 @@
   "description": {
     "en": "HTTPS API for managing customers' DNS records through dnshelper"
   },
-  "categories": ["system_administration"],
+  "categories": [
+    "system_administration"
+  ],
   "authors": [
     {
       "name": "Dan Brown"
     }
   ],
   "docs": {
-    "documentation_url": "https://github.com/danb35/ns8-dnsapi/blob/master/README.md",
+    "terms_url": "https://github.com/danb35/ns8-dnsapi/blob/master/TERMS.md",
+    "documentation_url": "https://github.com/danb35/ns8-dnsapi/blob/master/docs/USER-GUIDE.md",
     "bug_url": "https://github.com/danb35/ns8-dnsapi/issues",
-    "code_url": "https://github.com/danb35/ns8-dnsapi"
+    "code_url": "https://github.com/danb35/ns8-dnsapi",
+    "relnotes_url": "https://github.com/danb35/ns8-dnsapi/releases"
   },
   "source": "ghcr.io/danb35/dnsapi"
 }

@@ -267,9 +267,15 @@ restored settings and recreates the route. Restored keys keep working.
 - `server/`: the API service and its tests. `cd server && python3 -m unittest discover -s tests`
   runs them; `build-images.sh` runs them inside the built image too.
 - `imageroot/`: actions, `bin/`, events, `pypkg/dnsapi/`, the systemd units and the update hooks.
-- `ui/`: the admin UI (Vue 2, ns8-ui-lib). Only English is translated
-  (`ui/public/i18n/en/translation.json`); the other languages hold only the template's strings
-  and fall back to English. `ui/dev/` is a harness that runs the built UI in a browser with
+- `ui/`: the admin UI (Vue 2, ns8-ui-lib). Strings are written in English
+  (`ui/public/i18n/en/translation.json`) and translated into Arabic, Basque, French, German,
+  Italian, Portuguese (`pt` and `pt_BR`), Spanish, Tamil and Ukrainian. None of the translations
+  has been reviewed by a native speaker. In the languages dnshelper is translated into, its pages
+  and presets are named as its UI names them; elsewhere by their English names. The UI uses two
+  plural forms only, so the Arabic and Ukrainian counts are not always grammatical. A browser
+  set to `pt-BR` gets `pt_BR`, any other language its two-letter code, and a string a translation
+  lacks falls back to English (`ui/src/main.js`). Add a string to every language, and run a
+  locale's screenshots (`ui/dev/README.md`, `LOCALE`) to check that it fits. `ui/dev/` is a harness that runs the built UI in a browser with
   faked module data, and takes the user guide's screenshots (`ui/dev/README.md`).
 - The logo is `ui/src/assets/module_default_logo.png`, rendered at 256×256 from
   `module_default_logo.svg` beside it.

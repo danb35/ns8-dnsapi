@@ -706,8 +706,19 @@ wraps the task events in one promise, as theirs do):
    - Added after 0.1.0-testing.1 (2026-11-22, issue #12): keys sent over plain HTTP are revoked,
      and the route no longer redirects (see Security). Unit tests: 72, covering a real key (an
      operator key), a real id with the wrong secret, Basic on `/v1/acme/` and not elsewhere, the
-     switch off, and the revocation failing; the robot suite covers it through Traefik. Not yet
-     tested on a node.
+     switch off, and the revocation failing; the robot suite covers it through Traefik.
+   - Tested on the test node (2026-11-23, `dnsapi4` on node 3, Rocky 9, ns8-traefik 4.2.5),
+     after `update-module` from 0.1.0-testing.1: the new grant appeared in `selfadm`;
+     `30route` ran `configure-module`, which dropped `http2https` from `settings.json` and left
+     the route without the redirect; `revoke_cleartext_keys` read as on. Through Traefik over
+     plain HTTP, all 403 `https_required`: a key with a real operator key's id and the wrong
+     secret revoked nothing (logged as not a valid key; the real key still 200 over HTTPS); an
+     operator key was revoked (then 401 over HTTPS, the other operator key 200); an ACME tenant
+     key sent with Basic was not read on `/v1/zones` and was revoked on `/v1/acme/present`; with
+     the switch off, a key was only logged and kept working. Each revocation gave the action's
+     and the service's audit lines, an Activity entry and an `exposed_keys` entry in
+     `get-overview` (with the tenant's name). The test keys and tenant were removed afterwards.
+     Not tested on the node: the Status page's notice (checked in the `ui/dev` harness).
 9. Phase 2 (delegated zones), then phase 3 (PowerDNS hosting), as needed.
 
 ## Further hardening (not built)

@@ -2,7 +2,7 @@
     "$schema": "http://json-schema.org/draft-07/schema#",
     "title": "revoke-key input",
     "$id": "http://schema.nethserver.org/dnsapi/revoke-key-input.json",
-    "description": "Delete an API key",
+    "description": "Revoke an API key; its record is kept, marked revoked",
     "examples": [
         {
             "id": "a1b2c3d4"

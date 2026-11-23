@@ -5,7 +5,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 
-# Delete a key that the API service received over plain HTTP (DESIGN.md,
+# Revoke a key that the API service received over plain HTTP (DESIGN.md,
 # Security, HTTPS only). Unlike revoke-key, it revokes an operator key when
 # the service calls it: revoking only takes access away, and a key that
 # crossed the network in the clear must not keep working. The service calls
@@ -21,11 +21,12 @@ from dnsapi import state
 
 request = json.load(sys.stdin)
 with state.locked():
-    keys = state.keys()
-    record = keys.pop(request["id"], None)
+    record = state.keys().get(request["id"])
     if record is None:
         state.fail("id", "key_not_found", request["id"], "no such key")
-    state.save_keys(keys)
+    if record.get("revoked"):
+        state.fail("id", "key_revoked", request["id"], "the key is already revoked")
+    state.revoke_key(request["id"], "plain_http")
 state.audit("revoke-exposed-key", key=request["id"], owner=record["owner"],
             address=request.get("address", ""), reason="plain_http")
 json.dump({}, fp=sys.stdout)

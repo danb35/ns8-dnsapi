@@ -83,12 +83,15 @@ def seed():
         ("b7a35e42", "t81c0d4e7", "read", "Bakery monitoring", [], "2027-06-30T00:00:00Z", None, 45),
         ("e06c8d51", "t5be20a93", "write", "host1 certificates", ["10.0.0.5"], None, "acme", 1500),
         ("f41b7c29", "t5be20a93", "write", "nas certificates", ["10.0.0.9"], None, "acme", None),
+        ("2a6d03f5", "t3f9a21c0", "read", "Acme's old monitor", [], "2026-10-01T00:00:00Z", None, 75000),
+        ("6e8b14c3", "operator", "write", "Old billing portal", [], None, None, 9000),
     ]
     for kid, owner, scope, label, allow, expires, restrict, used in keys:
         KEYS[kid] = {"owner": owner, "scope": scope, "label": label, "allowlist": allow, "expires": expires,
                      "restrict": state.parse_restrict(restrict), "created": stamp(2500), "hash": "0" * 64}
         if used is not None:
             LAST_USED[kid] = stamp(used)
+    KEYS["6e8b14c3"].update(revoked=stamp(8000), revoked_reason="revoked")
     api = {"source": "api", "address": "203.0.113.10", "result": "ok"}
     ACTIVITY.extend([
         {**api, "time": stamp(3), "key": "4c1e9a07", "owner": "operator", "tenant": "t3f9a21c0",
@@ -118,7 +121,7 @@ class Refused(Exception):
 
 def tenant_out(tid):
     view = state.tenant_view(tid, TENANTS[tid])
-    view["keys"] = sum(1 for k in KEYS.values() if k["owner"] == tid)
+    view["keys"] = sum(1 for k in state.active_keys(KEYS).values() if k["owner"] == tid)
     return view
 
 
@@ -132,8 +135,8 @@ def get_overview(data):
         "zones_writable": len(ZONES), "zones_full": sum(1 for _, full in ZONES.values() if full),
         "zones_assigned": sum(len(t["zones"]) for t in TENANTS.values()),
         "tenants": len(TENANTS), "tenants_disabled": sum(1 for t in TENANTS.values() if not t["enabled"]),
-        "keys_operator": sum(1 for k in KEYS.values() if k["owner"] == "operator"),
-        "keys_tenant": sum(1 for k in KEYS.values() if k["owner"] != "operator"),
+        "keys_operator": sum(1 for k in state.active_keys(KEYS).values() if k["owner"] == "operator"),
+        "keys_tenant": sum(1 for k in state.active_keys(KEYS).values() if k["owner"] != "operator"),
         "host_record": HOST_RECORD,
         "exposed_keys": EXPOSED,
     }
@@ -205,7 +208,9 @@ def create_key(data):
 
 
 def revoke_key(data):
-    KEYS.pop(data["id"])
+    if KEYS[data["id"]].get("revoked"):
+        raise Refused("id", "key_revoked", data["id"], "the key is already revoked")
+    KEYS[data["id"]].update(revoked=state.now(), revoked_reason="revoked")
     return {}
 
 

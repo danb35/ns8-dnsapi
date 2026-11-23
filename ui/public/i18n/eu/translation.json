@@ -201,6 +201,10 @@
         "never": "Inoiz ez",
         "never_used": "Oraindik erabili gabe",
         "expired": "Iraungita",
+        "revoked": "Baliogabetua",
+        "revoked_on": "Baliogabetua: {time}",
+        "revoked_plain_http": "Baliogabetua: {time}; HTTP zifratu gabe bidali zen",
+        "show_inactive": "Erakutsi baliogabetutako eta iraungitako gakoak ({count})",
         "revoke": "Baliogabetu",
         "revoke_title": "Baliogabetu gakoa",
         "revoke_description": "{owner}-(r)en {label} gakoak berehala uzten dio funtzionatzeari. Ezin da desegin."

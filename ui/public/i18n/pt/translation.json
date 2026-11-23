@@ -201,6 +201,10 @@
         "never": "Nunca",
         "never_used": "Ainda não usada",
         "expired": "Expirada",
+        "revoked": "Revogada",
+        "revoked_on": "Revogada em {time}",
+        "revoked_plain_http": "Revogada em {time}: foi enviada por HTTP sem cifra",
+        "show_inactive": "Mostrar chaves revogadas e expiradas ({count})",
         "revoke": "Revogar",
         "revoke_title": "Revogar chave",
         "revoke_description": "A chave {label} de {owner} deixa de funcionar de imediato. Não é possível anular."

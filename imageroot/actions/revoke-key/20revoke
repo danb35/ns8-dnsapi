@@ -5,7 +5,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 
-# Delete a key; it stops working on the API's next request.
+# Revoke a key; it stops working on the API's next request. Its record is
+# kept, marked revoked, so that the Keys page can still list it.
 
 import json
 import os
@@ -16,12 +17,13 @@ from dnsapi import state
 
 request = json.load(sys.stdin)
 with state.locked():
-    keys = state.keys()
-    record = keys.pop(request["id"], None)
+    record = state.keys().get(request["id"])
     if record is None:
         state.fail("id", "key_not_found", request["id"], "no such key")
+    if record.get("revoked"):
+        state.fail("id", "key_revoked", request["id"], "the key is already revoked")
     if record["owner"] == "operator" and state.caller() == os.environ.get("AGENT_ID"):
         state.fail("id", "not_permitted", request["id"], "operator keys are revoked by a cluster administrator")
-    state.save_keys(keys)
+    state.revoke_key(request["id"], "revoked")
 state.audit("revoke-key", key=request["id"], owner=record["owner"])
 json.dump({}, fp=sys.stdout)

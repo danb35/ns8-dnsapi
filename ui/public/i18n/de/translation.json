@@ -201,6 +201,10 @@
         "never": "Nie",
         "never_used": "Noch nicht verwendet",
         "expired": "Abgelaufen",
+        "revoked": "Widerrufen",
+        "revoked_on": "Widerrufen am {time}",
+        "revoked_plain_http": "Widerrufen am {time}: über unverschlüsseltes HTTP gesendet",
+        "show_inactive": "Widerrufene und abgelaufene Schlüssel anzeigen ({count})",
         "revoke": "Widerrufen",
         "revoke_title": "Schlüssel widerrufen",
         "revoke_description": "Der Schlüssel {label} von {owner} funktioniert sofort nicht mehr. Dies kann nicht rückgängig gemacht werden."

@@ -220,6 +220,21 @@ Check that a revoked key stops working
     Should Be Equal As Integers    ${status}    204
     ${status}    ${body} =    Call API    GET    /v1/zones    ${TENANT_KEY}
     Should Be Equal As Integers    ${status}    401
+    Should Be Equal    ${body}[error][code]    key_revoked
+    # kept as a record: listed on request, and by list-keys with its status
+    ${status}    ${body} =    Call API    GET    /v1/tenants/${TENANT_ID}/keys    ${OPERATOR_KEY}
+    ${ids} =    Evaluate    [k['id'] for k in $body['keys']]
+    Should Not Contain    ${ids}    ${TENANT_KEY_ID}
+    ${status}    ${body} =    Call API    GET    /v1/tenants/${TENANT_ID}/keys?revoked=true    ${OPERATOR_KEY}
+    ${found} =    Evaluate    [k for k in $body['keys'] if k['id'] == $TENANT_KEY_ID]
+    Should Be Equal    ${found}[0][status]    revoked
+    ${status}    ${body} =    Call API    DELETE    /v1/tenants/${TENANT_ID}/keys/${TENANT_KEY_ID}    ${OPERATOR_KEY}
+    Should Be Equal As Integers    ${status}    404
+    ${output} =    Execute Command    api-cli run module/${module_id}/list-keys --data '{"owner": "operator"}'
+    ${keys} =    Evaluate    json.loads($output)['keys']    modules=json
+    ${exposed} =    Evaluate    [k for k in $keys if k['revoked_reason'] == 'plain_http']
+    Length Should Be    ${exposed}    1
+    Should Be Equal    ${exposed}[0][status]    revoked
 
 Check that removing the tenant through the API works
     ${status}    ${body} =    Call API    DELETE    /v1/tenants/${TENANT_ID}    ${OPERATOR_KEY}

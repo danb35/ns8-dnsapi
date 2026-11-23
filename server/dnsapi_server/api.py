@@ -170,6 +170,16 @@ def key_from_authorization(authorization, path):
     return ""
 
 
+def key_status(record, now):
+    """"revoked", "expired" or "active"."""
+    if record.get("revoked"):
+        return "revoked"
+    expires = parse_time(record.get("expires"))
+    if expires and expires <= now:
+        return "expired"
+    return "active"
+
+
 def address_allowed(address, allowlist):
     if not allowlist:
         return True
@@ -219,6 +229,10 @@ class Api:
             self.failures.hit(source, 0)
             log.warning("authentication failed from %s (key id %s)", req.client_ip, key_id or "-")
             raise self._unauthorized("invalid_key", "The API key is not valid")
+        if record.get("revoked"):
+            # The whole key matched, so only its holder learns that it was revoked.
+            log.warning("revoked key %s refused from %s", key_id, req.client_ip)
+            raise self._unauthorized("key_revoked", "The API key has been revoked")
         expires = parse_time(record.get("expires"))
         if expires and expires <= self.store.clock():
             raise self._unauthorized("key_expired", "The API key has expired")
@@ -249,6 +263,9 @@ class Api:
         if record is None or not keyfmt.hash_matches(key, record.get("hash")):
             log.warning("a key-shaped string with id %s that is not a valid key was sent over plain HTTP from %s",
                         key_id, address)
+            return
+        if record.get("revoked"):
+            log.warning("revoked key %s was sent over plain HTTP from %s", key_id, address)
             return
         if not self.store.settings().get("revoke_cleartext_keys", True):
             log.warning("key %s was sent over plain HTTP from %s: revoke it if the network may be watched",
@@ -708,6 +725,9 @@ class Api:
             "restrict": record.get("restrict"),
             "created": record.get("created"),
             "last_used": self.store.last_used.get(key_id),
+            "status": key_status(record, self.store.clock()),
+            "revoked": record.get("revoked"),
+            "revoked_reason": record.get("revoked_reason"),
         }
 
     def body_object(self, req):
@@ -775,7 +795,10 @@ class Api:
     def list_tenant_keys(self, req):
         self.require_operator(req)
         tenant_id = self.tenant_param(req)
-        found = [self.key_view(k, r) for k, r in sorted(self.store.keys().items()) if r["owner"] == tenant_id]
+        # Revoked keys are kept as records (DESIGN.md, Concepts), but listed only on request.
+        revoked = req.query.get("revoked", "").lower() in ("1", "true", "yes")
+        found = [self.key_view(k, r) for k, r in sorted(self.store.keys().items())
+                 if r["owner"] == tenant_id and (revoked or not r.get("revoked"))]
         return HTTPStatus.OK, {"keys": found}
 
     def create_tenant_key(self, req):
@@ -802,7 +825,7 @@ class Api:
         tenant_id = self.tenant_param(req)
         key_id = req.params["key"]
         record = self.store.keys().get(key_id) if KEY_ID_RE.match(key_id) else None
-        if record is None or record["owner"] != tenant_id:
+        if record is None or record["owner"] != tenant_id or record.get("revoked"):
             raise ApiError(HTTPStatus.NOT_FOUND, "key_not_found", "No such key")
         self.own_action("revoke-key", {"id": key_id})
         self.audit(req, "revoke-key", tenant=tenant_id, key=key_id)

@@ -226,7 +226,8 @@ Check that a revoked key stops working
     ${ids} =    Evaluate    [k['id'] for k in $body['keys']]
     Should Not Contain    ${ids}    ${TENANT_KEY_ID}
     ${status}    ${body} =    Call API    GET    /v1/tenants/${TENANT_ID}/keys?revoked=true    ${OPERATOR_KEY}
-    ${found} =    Evaluate    [k for k in $body['keys'] if k['id'] == $TENANT_KEY_ID]
+    # ${} substitution, not $var: a comprehension cannot see Robot's variables
+    ${found} =    Evaluate    [k for k in $body['keys'] if k['id'] == '${TENANT_KEY_ID}']
     Should Be Equal    ${found}[0][status]    revoked
     ${status}    ${body} =    Call API    DELETE    /v1/tenants/${TENANT_ID}/keys/${TENANT_KEY_ID}    ${OPERATOR_KEY}
     Should Be Equal As Integers    ${status}    404

@@ -173,8 +173,14 @@ make it safe and easy:
        ACME-restricted tenant key, against `dnsapi1` on the test node (`dnsapi:latest`, master at
        `a0b668d`), obtained a production Let's Encrypt certificate; the key's last-used time
        showed on the Keys page.
-   - certbot has no such plugin: the user guide shows `--manual-auth-hook` and
-     `--manual-cleanup-hook` scripts that call the REST API with curl.
+   - certbot has no such plugin: the user guide shows a `--manual-auth-hook` and
+     `--manual-cleanup-hook` script that calls `/v1/acme/present` and `/cleanup` with curl.
+     Tested 2026-11-23: certbot 4.0.0 on Debian 13, the guide's script unchanged, the same
+     ACME-restricted key as the Caddy test, Let's Encrypt's staging CA, one certificate for
+     `caddy-test.2v6.in` and `*.caddy-test.2v6.in`. Both values were at the same name at once,
+     each was removed on its own, and no record was left; two add and two delete audit lines, in
+     dnsapi's log and in dnshelper's (with `on_behalf_of`). It took 2 minutes, mostly the
+     script's 30-second wait after each value.
 
 A typical setup for internal hosts:
 - on dnshelper's Access page, the ACME preset for `module/dnsapi1` on the zones concerned;

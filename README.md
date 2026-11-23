@@ -148,7 +148,7 @@ twice).
 
 `POST /v1/acme/present` and `POST /v1/acme/cleanup` take `{"fqdn": "_acme-challenge.www.example.com.",
 "value": "<token>"}`: the protocol of lego's `httpreq` provider, acme.sh's `acmeproxy` and
-Caddy's `acmeproxy` DNS module (checked against their sources, see DESIGN.md). They accept HTTP Basic authentication with the
+Caddy's `acmeproxy` DNS module (checked against their sources, and each run against dnsapi; see DESIGN.md). They accept HTTP Basic authentication with the
 key as the password and any user name, as those clients send it; nowhere else does.
 
 - The `fqdn` must start with the label `_acme-challenge`; the trailing dot is optional. The zone

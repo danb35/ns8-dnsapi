@@ -354,6 +354,14 @@ name to use. The tenants keep their zones meanwhile.
 
 ## When something goes wrong
 
+**Saving Settings fails with "Unable to obtain ACME certificate"** and `Certificate not found`
+(`404 … urn:ietf:params:acme:error:malformed`): Let's Encrypt validated the host name, then could
+not hand over the certificate it had just issued. That is a passing fault at Let's Encrypt; the
+DNS record and the route are fine. Nothing was saved, so save the same settings again: Let's
+Encrypt reuses the validation and the certificate is issued in seconds. Other "Unable to obtain"
+errors come before validation: check that the host name resolves to this node from the internet
+and that ports 80 and 443 reach it (Traefik's log, `journalctl -t traefik`, has the details).
+
 **A zone cannot be given to a tenant (`409 zone_not_assignable`)**: dnshelper has no write rule
 for dnsapi on it (see [Letting dnsapi use zones](#letting-dnsapi-use-zones)). `409
 zone_assigned`: another tenant has it.

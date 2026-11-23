@@ -7,12 +7,12 @@
         {
             "host": "dnsapi.example.com",
             "lets_encrypt": true,
-            "http2https": true,
             "ip_allowlist": [
                 "203.0.113.10"
             ],
             "rate_limit": 60,
             "publish_host_record": true,
+            "revoke_cleartext_keys": true,
             "host_record": {
                 "host": "dnsapi.example.com",
                 "target": "node1.example.com",
@@ -31,10 +31,10 @@
     "required": [
         "host",
         "lets_encrypt",
-        "http2https",
         "ip_allowlist",
         "rate_limit",
         "publish_host_record",
+        "revoke_cleartext_keys",
         "host_record"
     ],
     "properties": {
@@ -48,9 +48,6 @@
         "lets_encrypt": {
             "type": "boolean"
         },
-        "http2https": {
-            "type": "boolean"
-        },
         "ip_allowlist": {
             "type": "array",
             "items": {
@@ -61,6 +58,9 @@
             "type": "integer"
         },
         "publish_host_record": {
+            "type": "boolean"
+        },
+        "revoke_cleartext_keys": {
             "type": "boolean"
         },
         "host_record": {

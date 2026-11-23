@@ -8,8 +8,8 @@
 import json
 import sys
 
-DEFAULTS = {"host": None, "lets_encrypt": False, "http2https": True, "ip_allowlist": [], "rate_limit": 60,
-            "publish_host_record": True}
+DEFAULTS = {"host": None, "lets_encrypt": False, "ip_allowlist": [], "rate_limit": 60,
+            "publish_host_record": True, "revoke_cleartext_keys": True}
 
 
 def load(name, default):

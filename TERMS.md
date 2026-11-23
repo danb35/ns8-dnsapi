@@ -28,7 +28,8 @@ allows. Clients never see dnshelper's credentials, its access rules, or another 
 
 A key is a random 256-bit secret; dnsapi keeps only its SHA-256 hash, which cannot be turned back
 into the key. A lost key cannot be shown again: revoke it and make a new one. A key that was sent
-over plain HTTP is refused, and the refusal is logged with its key id so that you can revoke it.
+over plain HTTP is refused and, unless you turn that off in Settings, revoked at once, since
+anyone on the network may have read it.
 
 ## Removing data
 

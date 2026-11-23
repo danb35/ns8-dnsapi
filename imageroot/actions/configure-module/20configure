@@ -7,7 +7,8 @@
 
 #
 # Merge the request into state/api/settings.json and publish the API on its
-# host name through Traefik (DESIGN.md, Security, Transport). The route
+# host name through Traefik (DESIGN.md, Security, Transport), without an
+# HTTP to HTTPS redirect. The route
 # instance is MODULE_ID, so ns8-traefik removes it with the module.
 #
 # set-route runs before the settings are saved: when Traefik refuses them
@@ -32,8 +33,8 @@ sys.path.insert(0, os.path.join(os.environ["AGENT_INSTALL_DIR"], "pypkg"))
 from dnsapi import dnshelper, hostrecord
 
 SETTINGS = "api/settings.json"
-DEFAULTS = {"host": None, "lets_encrypt": False, "http2https": True, "ip_allowlist": [], "rate_limit": 60,
-            "publish_host_record": True}
+DEFAULTS = {"host": None, "lets_encrypt": False, "ip_allowlist": [], "rate_limit": 60,
+            "publish_host_record": True, "revoke_cleartext_keys": True}
 
 
 def validation_failed(field, value, error):
@@ -49,6 +50,9 @@ try:
         settings = {**DEFAULTS, **json.load(fp)}
 except FileNotFoundError:
     settings = dict(DEFAULTS)
+# Earlier versions had an HTTP to HTTPS redirect setting; the route never
+# redirects now (see set-route below). An http2https in the request is ignored.
+settings.pop("http2https", None)
 
 for key in DEFAULTS:
     if key in request:
@@ -95,7 +99,11 @@ response = agent.tasks.run(
         "path": None,
         "lets_encrypt": settings["lets_encrypt"],
         "lets_encrypt_check": settings["lets_encrypt"],
-        "http2https": settings["http2https"],
+        # Never redirect: with the redirect, Traefik answers a plain-HTTP request
+        # itself, and the service could not tell the client, or revoke the key
+        # it sent in the clear (DESIGN.md, Security, HTTPS only). The service
+        # refuses plain HTTP with 403 https_required.
+        "http2https": False,
         # An empty list removes Traefik's allowlist middleware.
         "ip_allowlist": settings["ip_allowlist"],
     },

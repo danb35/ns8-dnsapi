@@ -45,7 +45,8 @@ Check that get-configuration returns the settings
     Should Be Equal As Integers    ${rc}  0
     ${config} =    Evaluate    json.loads($output)    modules=json
     Should Be Equal    ${config}[host]    ${API_HOST}
-    Should Be True    ${config}[http2https]
+    Should Be True    ${config}[revoke_cleartext_keys]
+    Should Not Contain    ${config}    http2https
 
 Check that the host record step reports dnshelper missing
     # No dnshelper on CI nodes: configure-module still succeeds and says why it did not publish.
@@ -67,9 +68,13 @@ Check that the status endpoint answers through Traefik
     ${status} =    Evaluate    json.loads($output)    modules=json
     Should Be Equal    ${status}[status]    ok
 
-Check that plain HTTP is redirected to HTTPS
-    ${output} =    Execute Command    curl -s -o /dev/null -w '\%{http_code} \%{redirect_url}' --resolve ${API_HOST}:80:127.0.0.1 http://${API_HOST}/v1/status
-    Should Match Regexp    ${output}    ^30[178] https://${API_HOST}/v1/status$
+Check that plain HTTP reaches the API and is refused, not redirected
+    # http2https was passed true above: it is ignored
+    ${output} =    Execute Command    curl -s -o /dev/null -w '\%{http_code}' --resolve ${API_HOST}:80:127.0.0.1 http://${API_HOST}/v1/status
+    Should Be Equal    ${output}    200
+    ${output} =    Execute Command    curl -s -w '\n\%{http_code}' --resolve ${API_HOST}:80:127.0.0.1 http://${API_HOST}/v1/zones
+    Should End With    ${output}    403
+    Should Contain    ${output}    https_required
 
 Check that the API refuses requests without a valid key
     ${status}    ${body} =    Call API    GET    /v1/nothing
@@ -188,6 +193,27 @@ Check that the ACME endpoints take Basic authentication
     Should Contain    ${output}    dnshelper_missing
     ${output} =    Execute Command    curl -sk -u 'any:${ACME_KEY}' -o /dev/null -w '\%{http_code}' --resolve ${API_HOST}:443:127.0.0.1 https://${API_HOST}/v1/zones
     Should Be Equal    ${output}    401
+
+Check that a key sent over plain HTTP is revoked
+    # a key-shaped string with a real key id is not enough
+    ${fake} =    Evaluate    $OPERATOR_KEY[:16] + 'a' * 52
+    ${output} =    Execute Command    curl -s -o /dev/null -w '\%{http_code}' -H 'Authorization: Bearer ${fake}' --resolve ${API_HOST}:80:127.0.0.1 http://${API_HOST}/v1/tenants
+    Should Be Equal    ${output}    403
+    ${status}    ${body} =    Call API    GET    /v1/tenants    ${OPERATOR_KEY}
+    Should Be Equal As Integers    ${status}    200
+    # an operator key sent with Basic to an ACME endpoint, as lego and acme.sh do
+    ${output} =    Execute Command    curl -s -u 'any:${ACME_KEY}' -H 'Content-Type: application/json' --data '{"fqdn": "_acme-challenge.www.example.test.", "value": "x"}' -w '\n\%{http_code}' --resolve ${API_HOST}:80:127.0.0.1 http://${API_HOST}/v1/acme/present
+    Should End With    ${output}    403
+    Should Contain    ${output}    https_required
+    ${output} =    Execute Command    curl -sk -u 'any:${ACME_KEY}' -H 'Content-Type: application/json' --data '{"fqdn": "_acme-challenge.www.example.test.", "value": "x"}' -o /dev/null -w '\%{http_code}' --resolve ${API_HOST}:443:127.0.0.1 https://${API_HOST}/v1/acme/present
+    Should Be Equal    ${output}    401
+    ${output} =    Execute Command    api-cli run module/${module_id}/get-overview
+    ${overview} =    Evaluate    json.loads($output)    modules=json
+    Should Be Equal As Integers    ${overview}[keys_operator]    1
+    Length Should Be    ${overview}[exposed_keys]    1
+    Should Be Equal    ${overview}[exposed_keys][0][owner]    operator
+    ${output} =    Execute Command    api-cli run module/${module_id}/list-activity
+    Should Contain    ${output}    revoke-exposed-key
 
 Check that a revoked key stops working
     ${status}    ${body} =    Call API    DELETE    /v1/tenants/${TENANT_ID}/keys/${TENANT_KEY_ID}    ${OPERATOR_KEY}

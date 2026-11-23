@@ -7,7 +7,8 @@
 # files from a read-only mount of state/api/, without the rest of state/
 # (agent.env, apitoken.cache); only the actions write them.
 #
-#   api/settings.json  {"host", "lets_encrypt", "http2https", "ip_allowlist", "rate_limit"}
+#   api/settings.json  {"host", "lets_encrypt", "ip_allowlist", "rate_limit",
+#                       "publish_host_record", "revoke_cleartext_keys"}
 #   api/tenants.json   {"tenants": {"t1a2b3c4d": {"name", "enabled", "zones", "created"}}}
 #   api/keys.json      {"keys": {"a1b2c3d4": {"owner", "scope", "hash", "label",
 #                                         "allowlist", "expires", "created"}}}
@@ -39,10 +40,10 @@ LEGACY = {"settings.json": SETTINGS, "tenants.json": TENANTS, "keys.json": KEYS,
 SETTINGS_DEFAULTS = {
     "host": None,
     "lets_encrypt": False,
-    "http2https": True,
     "ip_allowlist": [],
     "rate_limit": 60,
     "publish_host_record": True,
+    "revoke_cleartext_keys": True,
 }
 
 
@@ -209,6 +210,19 @@ def activity(limit):
             continue
     entries.sort(key=lambda e: e.get("time", ""), reverse=True)
     return entries[:limit]
+
+
+def exposed_keys(days):
+    """Keys revoked in the last `days` days because the API received them over plain
+    HTTP (revoke-exposed-key), newest first: {"time", "key", "owner", "address"}."""
+    since = (datetime.datetime.now(datetime.timezone.utc)
+             - datetime.timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    found = []
+    for entry in activity(ACTIVITY_KEEP * 2):
+        if entry.get("action") == "revoke-exposed-key" and entry.get("result") == "ok" \
+                and entry.get("time", "") >= since:
+            found.append({name: entry.get(name, "") for name in ("time", "key", "owner", "address")})
+    return found
 
 
 def tenant_view(tenant_id, tenant):

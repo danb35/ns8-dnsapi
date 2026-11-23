@@ -52,14 +52,15 @@ The schemas are in `imageroot/actions/<action>/validate-*.json`.
 
 | Action | Input | |
 |---|---|---|
-| `configure-module` | `host`, `lets_encrypt`, `http2https`, `ip_allowlist`, `rate_limit`, `publish_host_record` | publish the API, adding the host name's CNAME to the node through dnshelper first when it can; an omitted field keeps its value |
+| `configure-module` | `host`, `lets_encrypt`, `ip_allowlist`, `rate_limit`, `publish_host_record`, `revoke_cleartext_keys` (`http2https` is ignored: the route never redirects) | publish the API, adding the host name's CNAME to the node through dnshelper first when it can; an omitted field keeps its value |
 | `get-configuration` | none | the settings, and `host_record`: what configure-module found about the host name's DNS record |
 | `list-tenants`, `add-tenant`, `update-tenant`, `remove-tenant` | `name`, `enabled`, `id` | tenants; removing one removes its keys |
 | `assign-zone`, `unassign-zone` | `tenant`, `zone` | a zone dnshelper lets dnsapi write in; at most one tenant per zone |
 | `list-assignable-zones` | none | those zones, with `full` and their tenant |
 | `create-key` | `id`, `hash`, `owner`, `scope`, `label`, `allowlist`, `expires`, `restrict` | stores a key from its SHA-256: the action never sees the key |
 | `revoke-key`, `list-keys` | `id`; optional `owner` | |
-| `get-overview` | none | what the Status page shows: the API's address, the dnshelper instance, how many zones, tenants and keys |
+| `revoke-exposed-key` | `id`, `address` | called by the API service for a valid key it received over plain HTTP; revokes operator keys too |
+| `get-overview` | none | what the Status page shows: the API's address, the dnshelper instance, how many zones, tenants and keys, and `exposed_keys`: keys revoked in the last 7 days for being sent over plain HTTP |
 | `list-activity` | optional `limit` | the most recent changes, made through the API or the actions, newest first |
 
 `bin/create-key`, run with `runagent -m dnsapi1`, makes a key, stores its hash and prints it: it
@@ -68,7 +69,9 @@ is how the first operator key is made. The API service calls the tenant and key 
 
 ## API
 
-Base URL `https://<host>/v1`; plain HTTP is refused, and a key sent over it should be revoked.
+Base URL `https://<host>/v1`. Plain HTTP is not redirected: it is refused with 403
+`https_required`, and a valid key sent over it is revoked at once (unless the administrator turned
+that off), so a client configured with `http://` loses its key on the first request.
 The OpenAPI 3.1 document is at `/v1/openapi.json`, without a key (`server/make_openapi.py` writes
 it; a unit test checks that it describes every route). Send the key as `Authorization: Bearer
 <key>`; keys look like `dnsapi_<8 hex>_<52 base32>`. Bodies are JSON, at most 1 MB. A read key may only `GET`. Errors

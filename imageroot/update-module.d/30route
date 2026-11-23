@@ -1,0 +1,38 @@
+#!/usr/bin/env python3
+
+#
+# Copyright (C) 2026 Dan Brown
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+
+#
+# Republish the route of a configured instance: earlier versions could
+# publish it with an HTTP to HTTPS redirect, and configure-module now never
+# does (DESIGN.md, Security, HTTPS only). A failure is only logged: the
+# update itself has worked, and Settings shows the problem when saved.
+#
+
+import json
+import os
+import sys
+
+import agent
+import agent.tasks
+
+try:
+    with open("api/settings.json") as fp:
+        settings = json.load(fp)
+except FileNotFoundError:
+    settings = {}
+
+if not settings.get("host"):
+    sys.exit(0)
+
+response = agent.tasks.run(
+    agent_id=os.environ["AGENT_ID"],
+    action="configure-module",
+    data={},
+)
+if response["exit_code"] != 0:
+    print(agent.SD_WARNING + "cannot republish the route: "
+          + json.dumps(response.get("error") or response.get("output")), file=sys.stderr)

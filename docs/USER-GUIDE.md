@@ -62,12 +62,18 @@ From the command line:
 - `host`: the API is served at `https://<host>/v1/`. Required the first time.
 - `lets_encrypt`: request a Let's Encrypt certificate. If it is not issued, the action fails and
   nothing changes. Default off.
-- `http2https`: redirect plain HTTP to HTTPS. Default on.
 - `ip_allowlist`: addresses or networks (`203.0.113.10`, `198.51.100.0/24`) that may reach the
   API at all; everyone else is refused before dnsapi sees the request. Empty allows every
   address. If your only client is a billing server, put its address here.
 - `rate_limit`: DNS requests per minute for each key, default 60. Reads count too, because they
   count against your DNS host's own limits (GoDaddy, for example, allows about 60 per minute).
+- `revoke_cleartext_keys` (**Revoke keys sent over plain HTTP**): the API refuses plain HTTP;
+  with this on, a valid key a client sends over it, operator keys included, is also revoked at
+  once. Default on. See [Keys sent over plain HTTP](#keys-sent-over-plain-http).
+
+The API is not redirected from HTTP to HTTPS: a plain-HTTP request reaches dnsapi, which refuses
+it with `403 https_required`. (Earlier versions had a "Redirect HTTP to HTTPS" setting; updating
+removes the redirect.)
 
 On the command line, a field you leave out keeps its value. The **Status** page then shows the
 API's address. Check that it answers:
@@ -169,6 +175,19 @@ The key is made in your browser and shown once, with a copy button: copy it into
 the system that uses it before closing the dialog. The page lists the keys, with when each was
 last used; **Revoke** stops a key at once. If a key may have leaked, revoke it and make another.
 **Show keys** on the Tenants page lists one tenant's keys.
+
+### Keys sent over plain HTTP
+
+A client set up with `http://` instead of `https://` sends its key unencrypted, where anyone on the
+network path can read it. dnsapi refuses such a request with `403 https_required`, and, unless you
+turn **Revoke keys sent over plain HTTP** off in Settings, revokes the key at once, operator keys
+included. The client then gets `401 invalid_key` over HTTPS too: make a new key and set the
+client to the `https://` address.
+
+Only a complete, valid key is revoked: a request that merely names a key's id, which is not
+secret, revokes nothing. The **Status** page lists the keys revoked this way in the last 7 days,
+with the address they came from, and the **Activity** page records each one. With the setting off,
+the module's log names the key (`was sent over plain HTTP`) and you decide.
 
 ![The new key, shown once](images/key-created.png)
 
@@ -347,9 +366,12 @@ no write rule for dnsapi on it, or the zone is not in dnshelper. Check the Tenan
 own, so that a key does not reveal which zones you manage.
 
 **`403 https_required`**: the client used `http://`. Use the `https://` address. The key it sent
-crossed the network unencrypted: the module's log names it (`was sent over plain HTTP`), and if
-the network may be watched, revoke it and make another. "Redirect HTTP to HTTPS" does not help
-here: the key is sent before the redirect.
+crossed the network unencrypted and has been revoked (see
+[Keys sent over plain HTTP](#keys-sent-over-plain-http)): make another.
+
+**A key stopped working (`401 invalid_key`) and nobody revoked it**: look at the **Status** and
+**Activity** pages. It was probably sent over plain HTTP and revoked; the client must use
+`https://`.
 
 **`403 reserved_name`**: the record is the API's own host name, or its `_acme-challenge`; change
 it on dnshelper's Records page.

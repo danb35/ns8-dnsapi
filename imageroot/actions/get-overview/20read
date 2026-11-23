@@ -7,7 +7,8 @@
 
 # Everything the admin UI's Status page shows, in one task: the API's
 # address, the dnshelper instance and whether dnsapi may use it, and how many
-# zones, tenants and keys there are.
+# zones, tenants and keys there are, and the keys revoked recently because
+# they were sent over plain HTTP.
 
 import json
 import os
@@ -35,7 +36,11 @@ result = {
     "keys_operator": sum(1 for k in keys.values() if k["owner"] == "operator"),
     "keys_tenant": sum(1 for k in keys.values() if k["owner"] != "operator"),
     "host_record": state.load("host-record.json", None),
+    "exposed_keys": state.exposed_keys(days=7),
 }
+for entry in result["exposed_keys"]:
+    tenant = tenants.get(entry["owner"])
+    entry["tenant_name"] = tenant.get("name", "") if tenant else ""
 if target:
     try:
         writable = dnshelper.writable_zones(target)

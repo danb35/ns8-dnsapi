@@ -55,8 +55,11 @@ ZONES = {
     "example.com": ("cloudflare", True),
     "internal.example.net": ("hetzner", False),
 }
-SETTINGS = {"host": HOST, "lets_encrypt": True, "http2https": True, "ip_allowlist": [],
-            "rate_limit": 60, "publish_host_record": True}
+SETTINGS = {"host": HOST, "lets_encrypt": True, "ip_allowlist": [],
+            "rate_limit": 60, "publish_host_record": True, "revoke_cleartext_keys": True}
+# EXPOSED=1 shows the Status page's notice about a key revoked for being sent over plain HTTP
+EXPOSED = [{"time": "2026-11-22T09:30:00Z", "key": "7d41e9b2", "owner": "t81c0d4e7",
+            "tenant_name": "Corner Bakery", "address": "198.51.100.23"}] if os.environ.get("EXPOSED") else []
 HOST_RECORD = {"host": HOST, "target": NODE_FQDN, "zone": "example.com", "status": "created",
                "existing": [], "message": "", "checked": "2026-11-22T09:12:00Z"}
 TENANTS, KEYS, LAST_USED, ACTIVITY = {}, {}, {}, []
@@ -132,6 +135,7 @@ def get_overview(data):
         "keys_operator": sum(1 for k in KEYS.values() if k["owner"] == "operator"),
         "keys_tenant": sum(1 for k in KEYS.values() if k["owner"] != "operator"),
         "host_record": HOST_RECORD,
+        "exposed_keys": EXPOSED,
     }
 
 

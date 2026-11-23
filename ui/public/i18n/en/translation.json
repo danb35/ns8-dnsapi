@@ -35,7 +35,11 @@
         "go_to_settings": "Settings",
         "no_zones_title": "dnsapi may not use any zone yet",
         "no_zones_description": "On dnshelper's Access page, add a rule for module/{module} on the zones the API may manage: the \"API module (all records)\" preset for a customer's whole zone, or the ACME preset for certificate validation only.",
-        "api_host": "API host name"
+        "api_host": "API host name",
+        "exposed_keys_title": "A key was revoked because it was sent over plain HTTP | {n} keys were revoked because they were sent over plain HTTP",
+        "exposed_key": "{key} ({owner}, from {address})",
+        "exposed_keys_description": "In the last 7 days: {keys}. The clients using them now get 401: make new keys and set the clients to the https:// address.",
+        "go_to_activity": "Activity"
     },
     "settings": {
         "title": "Settings",
@@ -45,7 +49,8 @@
         "host_helper": "Clients reach the API at https://<host name>/v1/. It needs a DNS record pointing to this node, and must not be used by another application.",
         "lets_encrypt": "Let's Encrypt certificate",
         "lets_encrypt_tooltip": "The host name must resolve to this node from the internet, and port 80 must be reachable, for the certificate to be issued.",
-        "http2https": "Redirect HTTP to HTTPS",
+        "revoke_cleartext_keys": "Revoke keys sent over plain HTTP",
+        "revoke_cleartext_keys_tooltip": "The API refuses plain HTTP. With this on, a valid key that a client sends over it, operator keys included, is also revoked at once, since anyone on the network may have seen it.",
         "ip_allowlist": "Allowed client addresses",
         "ip_allowlist_helper": "One IP address or CIDR network per line. Traefik refuses every other client. Leave empty to allow any address.",
         "host_required": "Required",
@@ -226,6 +231,7 @@
         "action_unassign_zone": "Unassigned a zone",
         "action_create_key": "Created a key",
         "action_revoke_key": "Revoked a key",
+        "action_revoke_exposed_key": "Revoked a key sent over plain HTTP",
         "action_prune_zone": "Dropped a zone dnshelper no longer allows",
         "result_ok": "Done",
         "result_dry_run": "Dry run",

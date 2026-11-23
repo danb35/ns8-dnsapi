@@ -48,12 +48,15 @@
               <template slot="text-right">{{ $t("common.enabled") }}</template>
             </NsToggle>
             <NsToggle
-              value="http2https"
-              :label="$t('settings.http2https')"
-              v-model="isHttpToHttpsEnabled"
+              value="revokeCleartextKeys"
+              :label="$t('settings.revoke_cleartext_keys')"
+              v-model="revokeCleartextKeys"
               :disabled="stillLoading"
               class="mg-bottom"
             >
+              <template #tooltip>{{
+                $t("settings.revoke_cleartext_keys_tooltip")
+              }}</template>
               <template slot="text-left">{{ $t("common.disabled") }}</template>
               <template slot="text-right">{{ $t("common.enabled") }}</template>
             </NsToggle>
@@ -157,7 +160,7 @@ export default {
       urlCheckInterval: null,
       host: "",
       isLetsEncryptEnabled: false,
-      isHttpToHttpsEnabled: true,
+      revokeCleartextKeys: true,
       ipAllowlist: "",
       rateLimit: 60,
       publishHostRecord: true,
@@ -253,7 +256,7 @@ export default {
 
       this.host = config.host || "";
       this.isLetsEncryptEnabled = config.lets_encrypt;
-      this.isHttpToHttpsEnabled = config.http2https;
+      this.revokeCleartextKeys = config.revoke_cleartext_keys;
       this.ipAllowlist = config.ip_allowlist.join("\n");
       this.rateLimit = config.rate_limit;
       this.publishHostRecord = config.publish_host_record;
@@ -337,7 +340,7 @@ export default {
           data: {
             host: this.host,
             lets_encrypt: this.isLetsEncryptEnabled,
-            http2https: this.isHttpToHttpsEnabled,
+            revoke_cleartext_keys: this.revokeCleartextKeys,
             ip_allowlist: [...new Set(this.ipAllowlistEntries)],
             rate_limit: this.rateLimit,
             publish_host_record: this.publishHostRecord,

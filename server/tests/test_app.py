@@ -5,6 +5,7 @@
 # Run with: cd server && python3 -m unittest discover -s tests
 # build-images.sh runs them inside the built image.
 
+import base64
 import http.client
 import json
 import re
@@ -118,7 +119,7 @@ class FakeBackend:
                                             "created": "2026-11-21T00:00:00Z"}
                 write_json(state, "keys.json", keys)
                 return {}
-            if action == "revoke-key":
+            if action in ("revoke-key", "revoke-exposed-key"):
                 del keys["keys"][data["id"]]
                 write_json(state, "keys.json", keys)
                 return {}
@@ -286,7 +287,7 @@ class ApiTest(unittest.TestCase):
     # hardening (DESIGN.md, Security: HTTPS only, Concurrency limits, Brute force)
 
     def test_plain_http_is_refused(self):
-        resp, body = self.request("GET", "/v1/tenants", "operator", headers={"X-Forwarded-Proto": "http"})
+        resp, body = self.request("GET", "/v1/tenants", "operator_ro", headers={"X-Forwarded-Proto": "http"})
         self.assertError(resp, body, 403, "https_required")
         resp, body = self.request("GET", "/v1/tenants", "operator", headers={"X-Forwarded-Proto": "https"})
         self.assertEqual(resp.status, 200)
@@ -294,6 +295,74 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(resp.status, 200)
         resp, body = self.request("GET", "/v1/status", headers={"X-Forwarded-Proto": "http"})
         self.assertEqual(resp.status, 200)
+
+    def revocations(self):
+        return [c for c in self.backend.calls if c[1] == "revoke-exposed-key"]
+
+    def activity(self):
+        try:
+            with open(os.path.join(self.usage, "activity.jsonl")) as fp:
+                return [json.loads(line) for line in fp]
+        except FileNotFoundError:
+            return []
+
+    def test_plain_http_revokes_the_key(self):
+        # an operator key too: it crossed the network in the clear
+        key_id = self.key_id("operator")
+        resp, body = self.request("GET", "/v1/tenants", "operator",
+                                  headers={"X-Forwarded-Proto": "http", "X-Forwarded-For": "198.51.100.7"})
+        self.assertError(resp, body, 403, "https_required")
+        self.assertEqual(self.revocations(), [("self", "revoke-exposed-key", {"id": key_id, "address": "198.51.100.7"})])
+        resp, body = self.request("GET", "/v1/tenants", "operator", headers={"X-Forwarded-Proto": "https"})
+        self.assertError(resp, body, 401, "invalid_key")
+        entry = self.activity()[-1]
+        self.assertEqual((entry["action"], entry["key"], entry["owner"], entry["address"], entry["reason"],
+                          entry["result"]),
+                         ("revoke-exposed-key", key_id, "operator", "198.51.100.7", "plain_http", "ok"))
+        # the other keys still work
+        resp, body = self.request("GET", "/v1/zones", "acme", headers={"X-Forwarded-Proto": "https"})
+        self.assertEqual(resp.status, 200)
+
+    def test_plain_http_with_a_wrong_secret_revokes_nothing(self):
+        # key ids are not secret: knowing one must not be enough to get the key revoked
+        key_id = self.key_id("acme")
+        for fake in ("dnsapi_%s_%s" % (key_id, "a" * 52), "dnsapi_00000000_" + "a" * 52, "not-a-key"):
+            resp, body = self.request("GET", "/v1/zones", fake, headers={"X-Forwarded-Proto": "http"})
+            self.assertError(resp, body, 403, "https_required")
+        self.assertEqual(self.revocations(), [])
+        self.assertEqual(self.activity(), [])
+        resp, body = self.request("GET", "/v1/zones", "acme")
+        self.assertEqual(resp.status, 200)
+
+    def test_plain_http_revokes_a_basic_key_on_acme_only(self):
+        def basic(key):
+            return "Basic " + base64.b64encode(f"acme:{self.keys[key]}".encode()).decode()
+
+        # Basic is a key only on /v1/acme/, as for authentication
+        resp, body = self.request("GET", "/v1/zones", headers={"X-Forwarded-Proto": "http",
+                                                               "Authorization": basic("acme")})
+        self.assertError(resp, body, 403, "https_required")
+        self.assertEqual(self.revocations(), [])
+        resp, body = self.request("POST", "/v1/acme/present", body={"fqdn": "_acme-challenge.acme.test.", "value": "v"},
+                                  headers={"X-Forwarded-Proto": "http", "Authorization": basic("acme_host")})
+        self.assertError(resp, body, 403, "https_required")
+        self.assertEqual([c[2]["id"] for c in self.revocations()], [self.key_id("acme_host")])
+        # nothing was written
+        self.assertFalse([c for c in self.backend.calls if c[0] == "dnshelper"])
+
+    def test_plain_http_without_revocation(self):
+        write_json(self.dir, "settings.json", {"host": "api.test", "rate_limit": 60, "revoke_cleartext_keys": False})
+        resp, body = self.request("GET", "/v1/zones", "acme", headers={"X-Forwarded-Proto": "http"})
+        self.assertError(resp, body, 403, "https_required")
+        self.assertEqual(self.revocations(), [])
+        resp, body = self.request("GET", "/v1/zones", "acme")
+        self.assertEqual(resp.status, 200)
+
+    def test_plain_http_revocation_failing(self):
+        self.backend.fail_with = Unavailable("broker unreachable")
+        resp, body = self.request("GET", "/v1/zones", "acme", headers={"X-Forwarded-Proto": "http"})
+        self.assertError(resp, body, 403, "https_required")
+        self.assertEqual(self.activity()[-1]["result"], "failed:unavailable")
 
     def test_per_key_concurrency(self):
         from dnsapi_server import api as apimod
@@ -895,6 +964,7 @@ class BrokerTest(unittest.TestCase):
             ("self", "add-tenant", {"name": "x"}),
             ("self", "create-key", {"owner": "t00000001"}),
             ("self", "revoke-key", {"id": "abcdef12"}),
+            ("self", "revoke-exposed-key", {"id": "abcdef12", "address": "192.0.2.1"}),
         ]
         refused = [
             ("dnshelper", "append-records", {"zone": "x"}),  # no on_behalf_of

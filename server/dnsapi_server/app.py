@@ -18,7 +18,6 @@ import urllib.parse
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import keys as keyfmt
 from .api import Api, ApiError, Request, client_address, match_route
 from .backend import Backend
 from .limits import SlidingWindow
@@ -80,17 +79,15 @@ class Handler(BaseHTTPRequestHandler):
                 with open(OPENAPI_PATH) as fp:
                     self._send_json(HTTPStatus.OK, json.load(fp), head=head)
                 return
-            self._require_https()
+            self._require_https(path)
             body = self._read_body()
             api = self.api
-            runtime = api.store.runtime()
             req = Request(
                 method,
                 path,
                 {k: v[0] for k, v in urllib.parse.parse_qs(split.query).items()},
                 body,
-                client_address(self.client_address[0], self.headers.get_all("X-Forwarded-For") or [],
-                               int(runtime.get("proxies_depth") or 0)),
+                self._client_ip(),
             )
             self.client_ip = req.client_ip
             api.authenticate(req, self.headers.get("Authorization"))
@@ -115,20 +112,26 @@ class Handler(BaseHTTPRequestHandler):
             error = {"code": "internal_error", "message": "Internal error", "field": None}
             self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": error}, head=head)
 
-    def _require_https(self):
+    def _require_https(self, path):
         """Refuse a request Traefik received over plain HTTP (DESIGN.md, Security, HTTPS
         only). Traefik sets X-Forwarded-Proto; a request without it comes straight from the
-        node. The key, if any, has crossed the network in the clear: log its id."""
+        node. The key, if any, has crossed the network in the clear: Api.cleartext_key
+        revokes it, or logs it."""
         proto = (self.headers.get("X-Forwarded-Proto") or "").split(",")[0].strip().lower()
         if not proto or proto == "https":
             return
-        scheme, _, key = (self.headers.get("Authorization") or "").partition(" ")
-        key_id = keyfmt.parse_key(key.strip()) if scheme.lower() == "bearer" else None
-        if key_id:
-            log.warning("key %s was sent over plain HTTP from %s: revoke it if the network may be watched",
-                        key_id, self.headers.get("X-Forwarded-For") or self.client_address[0])
         self.close_connection = True
+        self.client_ip = self._client_ip()
+        try:
+            self.api.cleartext_key(self.headers.get("Authorization"), path, self.client_ip)
+        except Exception:
+            log.exception("cannot check the key sent over plain HTTP")
         raise ApiError(HTTPStatus.FORBIDDEN, "https_required", "Use https://: the API refuses plain HTTP")
+
+    def _client_ip(self):
+        runtime = self.api.store.runtime()
+        return client_address(self.client_address[0], self.headers.get_all("X-Forwarded-For") or [],
+                              int(runtime.get("proxies_depth") or 0))
 
     @staticmethod
     def _not_allowed(method, methods):

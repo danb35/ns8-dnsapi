@@ -16,7 +16,16 @@
             "tenants_disabled": 0,
             "keys_operator": 1,
             "keys_tenant": 3,
-            "host_record": null
+            "host_record": null,
+            "exposed_keys": [
+                {
+                    "time": "2026-11-22T09:30:00Z",
+                    "key": "a1b2c3d4",
+                    "owner": "t1a2b3c4d",
+                    "address": "203.0.113.10",
+                    "tenant_name": "Acme Shop"
+                }
+            ]
         }
     ],
     "type": "object",
@@ -32,7 +41,8 @@
         "tenants_disabled",
         "keys_operator",
         "keys_tenant",
-        "host_record"
+        "host_record",
+        "exposed_keys"
     ],
     "properties": {
         "host": {
@@ -133,6 +143,39 @@
                 },
                 "checked": {
                     "type": "string"
+                }
+            }
+        },
+        "exposed_keys": {
+            "type": "array",
+            "description": "Keys revoked in the last 7 days because the API received them over plain HTTP, newest first",
+            "items": {
+                "type": "object",
+                "required": [
+                    "time",
+                    "key",
+                    "owner",
+                    "address",
+                    "tenant_name"
+                ],
+                "properties": {
+                    "time": {
+                        "type": "string"
+                    },
+                    "key": {
+                        "type": "string"
+                    },
+                    "owner": {
+                        "type": "string",
+                        "description": "operator, or the tenant id"
+                    },
+                    "address": {
+                        "type": "string"
+                    },
+                    "tenant_name": {
+                        "type": "string",
+                        "description": "The tenant's name; empty for an operator key"
+                    }
                 }
             }
         }

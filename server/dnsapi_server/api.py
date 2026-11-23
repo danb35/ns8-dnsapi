@@ -153,6 +153,23 @@ def throttle_key(address):
     return str(ip)
 
 
+def key_from_authorization(authorization, path):
+    """The key an Authorization header carries, or "": Bearer anywhere, and Basic on
+    /v1/acme/, where lego's httpreq, acme.sh's acmeproxy and Caddy's acmeproxy send the
+    key as the password (the user name is not used)."""
+    scheme, _, value = (authorization or "").partition(" ")
+    scheme = scheme.lower()
+    value = value.strip()
+    if scheme == "bearer":
+        return value
+    if scheme == "basic" and path.startswith("/v1/acme/"):
+        try:
+            return base64.b64decode(value, validate=True).decode().partition(":")[2]
+        except (binascii.Error, UnicodeDecodeError):
+            return ""
+    return ""
+
+
 def address_allowed(address, allowlist):
     if not allowlist:
         return True
@@ -195,17 +212,8 @@ class Api:
                            "Too many failed authentications", headers={"Retry-After": str(wait)})
         if not authorization:
             raise self._unauthorized("missing_key", "An API key is required")
-        scheme, _, key = authorization.partition(" ")
-        key = key.strip()
-        if scheme.lower() == "basic" and req.path.startswith("/v1/acme/"):
-            # lego's httpreq and acme.sh's acmeproxy send Basic: the key is the
-            # password, the user name is not used.
-            try:
-                key = base64.b64decode(key, validate=True).decode().partition(":")[2]
-            except (binascii.Error, UnicodeDecodeError):
-                key = ""
-            scheme = "bearer"
-        key_id = keyfmt.parse_key(key) if scheme.lower() == "bearer" else None
+        key = key_from_authorization(authorization, req.path)
+        key_id = keyfmt.parse_key(key) if key else None
         record = self.store.keys().get(key_id) if key_id else None
         if record is None or not keyfmt.hash_matches(key, record.get("hash")):
             self.failures.hit(source, 0)
@@ -225,6 +233,46 @@ class Api:
                            "This key may not be used from this address")
         self.store.touch_key(key_id)
         req.principal = Principal(key_id, record, tenant)
+
+    def cleartext_key(self, authorization, path, address):
+        """A request came over plain HTTP (refused by the caller with https_required). If it
+        carried a valid key, that key crossed the network in the clear: revoke it when
+        revoke_cleartext_keys is on (the default), else log it. A key-shaped string that does
+        not match its stored hash is only logged, so that nobody can get a key revoked by
+        knowing its id, which is not secret (DESIGN.md, Security, HTTPS only). Never raises:
+        the answer is the same 403 whatever happens here."""
+        key = key_from_authorization(authorization, path)
+        key_id = keyfmt.parse_key(key) if key else None
+        if not key_id:
+            return
+        record = self.store.keys().get(key_id)
+        if record is None or not keyfmt.hash_matches(key, record.get("hash")):
+            log.warning("a key-shaped string with id %s that is not a valid key was sent over plain HTTP from %s",
+                        key_id, address)
+            return
+        if not self.store.settings().get("revoke_cleartext_keys", True):
+            log.warning("key %s was sent over plain HTTP from %s: revoke it if the network may be watched",
+                        key_id, address)
+            return
+        try:
+            self.own_action("revoke-exposed-key", {"id": key_id, "address": address})
+            result = "ok"
+        except ApiError as exc:
+            log.error("key %s was sent over plain HTTP from %s and could not be revoked: %s",
+                      key_id, address, exc.message)
+            result = f"failed:{exc.code}"
+        except Exception:
+            log.exception("key %s was sent over plain HTTP from %s and could not be revoked", key_id, address)
+            result = "failed"
+        owner = record.get("owner", "")
+        tenant = owner if owner != "operator" else ""
+        log.info('dnsapi audit: key="%s" owner="%s" address="%s" action="revoke-exposed-key" '
+                 'reason="plain_http" result="%s"', key_id, owner, address, result)
+        self.store.append_activity({
+            "source": "api", "key": key_id, "owner": owner, "tenant": tenant, "address": address,
+            "action": "revoke-exposed-key", "target_key": key_id, "reason": "plain_http",
+            "result": result,
+        })
 
     def enter(self, req):
         """Count a request of the key in progress; refuse beyond MAX_PER_KEY."""

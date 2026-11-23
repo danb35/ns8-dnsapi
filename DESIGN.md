@@ -229,7 +229,7 @@ manages. `configure-module` then publishes it itself, so that the Let's Encrypt 
 ## Security
 
 - **Transport:** a Traefik route on a dedicated host name (`set-route`: `host`, `lets_encrypt`,
-  `http2https`). There is an optional cluster-wide IP allowlist (`ip_allowlist`, present in
+  and `http2https` always off, see HTTPS only). There is an optional cluster-wide IP allowlist (`ip_allowlist`, present in
   ns8-traefik since 3.0.0, verified in its `set-route` schema), so an operator whose only client is
   their billing server can close the API to everyone else at Traefik. The service listens on
   127.0.0.1 on a port from `org.nethserver.tcp-ports-demand`.
@@ -257,6 +257,25 @@ manages. `configure-module` then publishes it itself, so that the Let's Encrypt 
   Verified on the test node (2026-11-21): Traefik replaces a client's `X-Forwarded-Proto`, as
   it does `X-Forwarded-For`. `http2https` cannot prevent the first cleartext request: the redirect comes
   after the key was sent. Clients must use the `https://` URL.
+- **Keys sent over plain HTTP are revoked** (decision 2026-11-22, issue #12). A key that crossed
+  the network in the clear has to be replaced anyway, and the request has already been refused,
+  so revoking it at once only stops whoever captured it.
+  - The route never redirects: `configure-module` always sends `http2https: false`, and the
+    setting is gone (`http2https` in its input is accepted and ignored;
+    `update-module.d/30route` republishes an existing route). With the redirect, Traefik answers
+    a plain-HTTP request itself, so the service could neither tell the client why it failed nor
+    revoke the key, and a well-behaved client does not send its key again to the new address.
+  - The key is checked against its hash first, as authentication does: key ids are not secret
+    (logs, the Keys and Activity pages), so a key-shaped string with a real id and the wrong
+    secret is only logged. Basic is read on `/v1/acme/` too, where the ACME clients send it.
+    The answer is the same 403 `https_required` whatever happens, so it reveals nothing.
+  - The service calls `revoke-exposed-key` through the broker. Unlike `revoke-key`, it revokes
+    operator keys too when the module calls it. Revoking only takes access away: a compromised
+    service could already refuse every request, so this gives it nothing new; making operator
+    keys stays out of its reach.
+  - An audit line and an Activity entry (`revoke-exposed-key`, with the client address); the
+    Status page lists the keys revoked so in the last 7 days (`get-overview` `exposed_keys`).
+  - `revoke_cleartext_keys` in Settings, default on; off, the key id is only logged, as before.
 - **Concurrency limits** (decision 2026-11-21, security review): the service started a thread per
   connection without limit, and a request waits up to 150 s for a DNS host. Now at most 64
   connections are served at once (one more is answered 503 `busy` and closed), at most 4 requests
@@ -302,7 +321,8 @@ manages. `configure-module` then publishes it itself, so that the Let's Encrypt 
     actions through its `selfadm` role (`create-module/10grants`, and `update-module.d/10grants`
     for existing installs), so the actions stay the only writers. The service may make and revoke
     tenant keys only: `create-key` and `revoke-key` refuse operator keys when the caller is the
-    module itself.
+    module itself. The one exception is `revoke-exposed-key`, for a key the API received over
+    plain HTTP (see Security).
   - The container runs with `--network=host`, as the module's uid (`--userns=keep-id`), with
     `state/api/` mounted read-only (the files it reads) and `state/usage/` writable (last-used
     times, activity). It has no NS8 credentials: see "The broker" below.
@@ -333,7 +353,7 @@ manages. `configure-module` then publishes it itself, so that the Let's Encrypt 
     `delete-records`, `apply-changes`), which must carry `on_behalf_of`, so records written
     through the API never get dnsapi as their owner; on this module, `add-tenant`,
     `update-tenant`, `remove-tenant`, `assign-zone`, `unassign-zone`, `create-key` (never for the
-    operator) and `revoke-key`. It finds dnshelper itself (discovery), so the service no longer
+    operator), `revoke-key` and `revoke-exposed-key`. It finds dnshelper itself (discovery), so the service no longer
     needs to.
   - A compromised service can then do what its API allows, and nothing else: no Traefik, no other
     action of this module, no other module.
@@ -409,9 +429,9 @@ manages. `configure-module` then publishes it itself, so that the Let's Encrypt 
   is how the first operator key is made. An NS8 task's input and output stay in Redis, so an
   action that returned the key would have left it there.
 - Actions (admin UI): `configure-module` (host name, Let's Encrypt, Traefik IP allowlist, rate
-  limits), `get-configuration`, `list-tenants`, `add-tenant`, `update-tenant`, `remove-tenant`,
+  limits, the host record, revoking keys sent over plain HTTP), `get-configuration`, `list-tenants`, `add-tenant`, `update-tenant`, `remove-tenant`,
   `assign-zone`, `unassign-zone`, `list-assignable-zones`, `create-key` (takes the hash, see
-  above), `revoke-key`, `list-keys`. Operator keys are made only by a cluster administrator; the
+  above), `revoke-key`, `list-keys`; for the service only, `revoke-exposed-key`. Operator keys are made only by a cluster administrator; the
   API has no endpoint for them.
 - Events: on dnshelper's `service-dnshelper-changed`, drop assignments of zones dnshelper no longer
   manages (`has-zone` says `managed: false`). Log it; never fail. Changed (2026-11-21, step 6): a
@@ -469,7 +489,8 @@ wraps the task events in one promise, as theirs do):
      request), in its own image `dnsapi-server`, built and published beside the module image with
      the same tag and unit-tested inside it by `build-images.sh`. Non-root user, `--read-only`
      container, published on `127.0.0.1:${TCP_PORT}`.
-   - `configure-module`: `host`, `lets_encrypt`, `http2https`, `ip_allowlist`, kept in
+   - `configure-module`: `host`, `lets_encrypt`, `http2https` (removed later, see Security,
+     Keys sent over plain HTTP are revoked), `ip_allowlist`, kept in
      `state/settings.json` (backed up). It calls `set-route` before saving, with
      `lets_encrypt_check` when a certificate is requested, so a refused setting changes nothing.
      An omitted field keeps its value. `restore-module` re-runs it to recreate the route.
@@ -682,6 +703,22 @@ wraps the task events in one promise, as theirs do):
      on that node applies no AppArmor profile to either container, so the socket needs no rule.
    - Not tested on a node: the concurrency caps and the /64 throttle (unit tests only; the node
      has no working IPv6).
+   - Added after 0.1.0-testing.1 (2026-11-22, issue #12): keys sent over plain HTTP are revoked,
+     and the route no longer redirects (see Security). Unit tests: 72, covering a real key (an
+     operator key), a real id with the wrong secret, Basic on `/v1/acme/` and not elsewhere, the
+     switch off, and the revocation failing; the robot suite covers it through Traefik.
+   - Tested on the test node (2026-11-23, `dnsapi4` on node 3, Rocky 9, ns8-traefik 4.2.5),
+     after `update-module` from 0.1.0-testing.1: the new grant appeared in `selfadm`;
+     `30route` ran `configure-module`, which dropped `http2https` from `settings.json` and left
+     the route without the redirect; `revoke_cleartext_keys` read as on. Through Traefik over
+     plain HTTP, all 403 `https_required`: a key with a real operator key's id and the wrong
+     secret revoked nothing (logged as not a valid key; the real key still 200 over HTTPS); an
+     operator key was revoked (then 401 over HTTPS, the other operator key 200); an ACME tenant
+     key sent with Basic was not read on `/v1/zones` and was revoked on `/v1/acme/present`; with
+     the switch off, a key was only logged and kept working. Each revocation gave the action's
+     and the service's audit lines, an Activity entry and an `exposed_keys` entry in
+     `get-overview` (with the tenant's name). The test keys and tenant were removed afterwards.
+     Not tested on the node: the Status page's notice (checked in the `ui/dev` harness).
 9. Phase 2 (delegated zones), then phase 3 (PowerDNS hosting), as needed.
 
 ## Further hardening (not built)

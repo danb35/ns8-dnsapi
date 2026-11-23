@@ -42,6 +42,20 @@
         />
       </cv-column>
     </cv-row>
+    <cv-row v-if="!loading.overview && overview.exposed_keys.length">
+      <cv-column>
+        <NsInlineNotification
+          kind="warning"
+          :title="
+            $tc('status.exposed_keys_title', overview.exposed_keys.length)
+          "
+          :description="exposedKeysDescription"
+          :actionLabel="$t('status.go_to_activity')"
+          @action="goToAppPage(instanceName, 'activity')"
+          :showCloseButton="false"
+        />
+      </cv-column>
+    </cv-row>
     <cv-row v-if="!loading.overview && overview.dnshelper_error">
       <cv-column>
         <NsInlineNotification
@@ -448,6 +462,7 @@ export default {
         keys_operator: 0,
         keys_tenant: 0,
         host_record: null,
+        exposed_keys: [],
       },
       loading: {
         overview: false,
@@ -475,6 +490,21 @@ export default {
         return null;
       }
       return this.hostRecordStatus(record);
+    },
+    exposedKeysDescription() {
+      const keys = this.overview.exposed_keys.map((e) =>
+        this.$t("status.exposed_key", {
+          key: e.key,
+          owner:
+            e.owner === "operator"
+              ? this.$t("keys.operator")
+              : e.tenant_name || e.owner,
+          address: e.address,
+        })
+      );
+      return this.$t("status.exposed_keys_description", {
+        keys: keys.join("; "),
+      });
     },
     installationNodeTitle() {
       if (this.status && this.status.node) {

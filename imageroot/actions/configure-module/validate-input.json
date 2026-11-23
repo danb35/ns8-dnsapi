@@ -2,18 +2,18 @@
     "$schema": "http://json-schema.org/draft-07/schema#",
     "title": "configure-module input",
     "$id": "http://schema.nethserver.org/dnsapi/configure-module-input.json",
-    "description": "Configure dnsapi: the host name the API is published on, its certificate and HTTP redirect, the client addresses Traefik lets through, and the per-key rate limit. An omitted field keeps its current value; host is required until it has been set once.",
+    "description": "Configure dnsapi: the host name the API is published on, its certificate, the client addresses Traefik lets through, the per-key rate limit, the host name's DNS record and whether keys sent over plain HTTP are revoked. An omitted field keeps its current value; host is required until it has been set once.",
     "examples": [
         {
             "host": "dnsapi.example.com",
             "lets_encrypt": true,
-            "http2https": true,
             "ip_allowlist": [
                 "203.0.113.10",
                 "198.51.100.0/24"
             ],
             "rate_limit": 60,
-            "publish_host_record": true
+            "publish_host_record": true,
+            "revoke_cleartext_keys": true
         },
         {
             "ip_allowlist": []
@@ -37,8 +37,8 @@
         },
         "http2https": {
             "type": "boolean",
-            "title": "HTTP to HTTPS redirection",
-            "description": "Redirect plain HTTP requests to HTTPS. Default true."
+            "title": "HTTP to HTTPS redirection (ignored)",
+            "description": "Accepted for compatibility and ignored: the route never redirects, so that the API can refuse a plain-HTTP request itself, with 403 https_required, and revoke the key it carried."
         },
         "ip_allowlist": {
             "type": "array",
@@ -63,6 +63,11 @@
             "type": "boolean",
             "title": "Publish the host name in DNS",
             "description": "When the host name is in a zone dnshelper manages and its rules let dnsapi write it, add a CNAME from the host name to this node if there is none. Another record at the name is never changed. Default true."
+        },
+        "revoke_cleartext_keys": {
+            "type": "boolean",
+            "title": "Revoke keys sent over plain HTTP",
+            "description": "Revoke a valid key, operator keys included, as soon as the API receives it over plain HTTP; the request is refused either way. Default true."
         }
     }
 }

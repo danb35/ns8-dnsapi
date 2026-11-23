@@ -139,7 +139,10 @@ doc = {
                        "responses": {"204": {"description": "Unassigned"}, **errors(401, 403, 404, 429)}}},
         "/v1/tenants/{id}/keys": {
             "parameters": [TENANT_P],
-            "get": {"summary": "The tenant's keys", "tags": ["tenants (operator)"],
+            "get": {"summary": "The tenant's keys", "description": "Revoked keys are left out unless revoked=true.",
+                    "parameters": [{"name": "revoked", "in": "query", "schema": {"type": "boolean"},
+                                    "description": "Also list revoked keys"}],
+                    "tags": ["tenants (operator)"],
                     "responses": {**ok("#/components/schemas/KeyList"), **errors(401, 403, 404, 429)}},
             "post": {"summary": "Make a tenant key", "description": "The response is the only place the key appears.",
                      "tags": ["tenants (operator)"], "requestBody": body("#/components/schemas/KeyRequest"),
@@ -159,7 +162,7 @@ doc = {
         "schemas": {
             "Error": {"type": "object", "required": ["error"], "properties": {"error": {
                 "type": "object", "required": ["code", "message", "field"],
-                "properties": {"code": {"type": "string", "description": "invalid_request, invalid_json, missing_key, invalid_key, key_expired, insufficient_scope, tenant_disabled, address_not_allowed, restricted_key, outside_restriction, not_found, zone_not_found, tenant_not_found, key_not_found, stale, conflict, zone_assigned, zone_not_assignable, reserved_name, https_required, body_too_large, rate_limited, too_many_concurrent, busy, upstream_error, upstream_timeout, unavailable, dnshelper_missing, and dnshelper's own codes such as not_permitted and forbidden"},
+                "properties": {"code": {"type": "string", "description": "invalid_request, invalid_json, missing_key, invalid_key, key_expired, key_revoked, insufficient_scope, tenant_disabled, address_not_allowed, restricted_key, outside_restriction, not_found, zone_not_found, tenant_not_found, key_not_found, stale, conflict, zone_assigned, zone_not_assignable, reserved_name, https_required, body_too_large, rate_limited, too_many_concurrent, busy, upstream_error, upstream_timeout, unavailable, dnshelper_missing, and dnshelper's own codes such as not_permitted and forbidden"},
                                "message": {"type": "string"}, "field": {"type": ["string", "null"]}}}}},
             "Status": {"type": "object", "properties": {"status": {"const": "ok"}}},
             "Record": {**record, "required": ["name", "type", "ttl", "data"],
@@ -232,7 +235,11 @@ doc = {
                 "expires": {"type": ["string", "null"], "format": "date-time"},
                 "restrict": {"type": ["object", "null"]},
                 "created": {"type": ["string", "null"], "format": "date-time"},
-                "last_used": {"type": ["string", "null"], "format": "date-time"}}},
+                "last_used": {"type": ["string", "null"], "format": "date-time"},
+                "status": {"enum": ["active", "expired", "revoked"]},
+                "revoked": {"type": ["string", "null"], "format": "date-time"},
+                "revoked_reason": {"enum": ["revoked", "plain_http", None],
+                                   "description": "plain_http: revoked because the API received it over plain HTTP"}}},
             "KeyList": {"type": "object", "properties": {"keys": {"type": "array", "items": {"$ref": "#/components/schemas/Key"}}}},
             "KeyRequest": {"type": "object", "required": ["scope"], "properties": {
                 "scope": {"enum": ["read", "write"]}, "label": {"type": "string", "maxLength": 100},

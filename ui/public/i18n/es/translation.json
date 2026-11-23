@@ -201,6 +201,10 @@
         "never": "Nunca",
         "never_used": "Aún sin usar",
         "expired": "Caducada",
+        "revoked": "Revocada",
+        "revoked_on": "Revocada el {time}",
+        "revoked_plain_http": "Revocada el {time}: se envió por HTTP sin cifrar",
+        "show_inactive": "Mostrar claves revocadas y caducadas ({count})",
         "revoke": "Revocar",
         "revoke_title": "Revocar clave",
         "revoke_description": "La clave {label} de {owner} deja de funcionar al instante. No se puede deshacer."

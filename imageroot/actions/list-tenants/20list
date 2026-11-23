@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.join(os.environ["AGENT_INSTALL_DIR"], "pypkg"))
 from dnsapi import state
 
 tenants = state.tenants()
-keys = state.keys()
+keys = state.active_keys(state.keys())
 result = []
 for tenant_id in sorted(tenants):
     view = state.tenant_view(tenant_id, tenants[tenant_id])

@@ -2,7 +2,7 @@
     "$schema": "http://json-schema.org/draft-07/schema#",
     "title": "revoke-exposed-key input",
     "$id": "http://schema.nethserver.org/dnsapi/revoke-exposed-key-input.json",
-    "description": "Delete an API key, operator keys included, because it was sent over plain HTTP. The API service calls it after checking the whole key; an administrator uses revoke-key.",
+    "description": "Revoke an API key, operator keys included, because it was sent over plain HTTP. The API service calls it after checking the whole key; an administrator uses revoke-key.",
     "examples": [
         {
             "id": "a1b2c3d4",

@@ -201,6 +201,10 @@
         "never": "Jamais",
         "never_used": "Pas encore utilisée",
         "expired": "Expirée",
+        "revoked": "Révoquée",
+        "revoked_on": "Révoquée le {time}",
+        "revoked_plain_http": "Révoquée le {time} : envoyée en HTTP non chiffré",
+        "show_inactive": "Afficher les clés révoquées et expirées ({count})",
         "revoke": "Révoquer",
         "revoke_title": "Révoquer la clé",
         "revoke_description": "La clé {label} de {owner} cesse de fonctionner immédiatement. Cette action est irréversible."

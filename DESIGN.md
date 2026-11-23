@@ -67,6 +67,17 @@ means:
   - A key can also be restricted to some names and types (`restrict`, see
     [ACME DNS-01 validation](#acme-dns-01-validation)); by default it reaches every record of its
     zones.
+  - Revoked keys are kept (decision 2026-11-23, from the operator), so the Keys page can list
+    them. `revoke-key` and `revoke-exposed-key` mark the record with `revoked` (the time) and
+    `revoked_reason` (`revoked`, or `plain_http` for a key the API received over plain HTTP)
+    instead of deleting it; the hash stays, so a revoked key is refused with 401 `key_revoked`
+    after its hash matches, and its id can never be made again. `list-keys` returns every key
+    with a `status` (`active`, `expired`, `revoked`); the Keys page lists the expired and revoked
+    ones after the others, dimmed and struck through, behind a "Show revoked and expired keys"
+    check box (on by default, remembered in the browser). `GET /v1/tenants/{id}/keys` leaves
+    revoked keys out unless `?revoked=true`, so existing portals see no change. The tenant and
+    Status page counts are of active keys only. `remove-tenant` still deletes its keys: they
+    would have no owner to list them under. Kept without limit: a record is a few hundred bytes.
 - **Key format:** `dnsapi_<id>_<secret>`. The id (8 hex) finds the record. The secret (32 random
   bytes, base32) is stored only as its SHA-256 hash, which is enough for a random secret of that
   length. The full key is shown once, at creation; there is no way to read it back. The prefix

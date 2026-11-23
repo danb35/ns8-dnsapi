@@ -57,6 +57,17 @@
       </cv-row>
       <cv-row>
         <cv-column>
+          <cv-checkbox
+            v-model="showInactive"
+            value="inactive"
+            :label="$t('keys.show_inactive', { count: inactiveCount })"
+            :disabled="loading.load"
+            class="mg-bottom-md"
+          />
+        </cv-column>
+      </cv-row>
+      <cv-row>
+        <cv-column>
           <NsDataTable
             :allRows="shownKeys"
             :columns="columns"
@@ -86,10 +97,33 @@
                 v-for="(row, i) in page"
                 :key="row.id"
                 :value="String(i)"
+                :class="{ inactive: statusOf(row) !== 'active' }"
               >
                 <cv-data-table-cell>
-                  <strong>{{ row.label || row.id }}</strong>
+                  <strong class="key-label">{{ row.label || row.id }}</strong>
+                  <NsTag
+                    v-if="statusOf(row) === 'revoked'"
+                    :label="$t('keys.revoked')"
+                    kind="red"
+                    size="sm"
+                  />
+                  <NsTag
+                    v-else-if="statusOf(row) === 'expired'"
+                    :label="$t('keys.expired')"
+                    kind="high-contrast"
+                    size="sm"
+                  />
                   <div class="secondary">dnsapi_{{ row.id }}_…</div>
+                  <div v-if="row.revoked" class="secondary">
+                    {{
+                      $t(
+                        row.revoked_reason === "plain_http"
+                          ? "keys.revoked_plain_http"
+                          : "keys.revoked_on",
+                        { time: formatTime(row.revoked) }
+                      )
+                    }}
+                  </div>
                 </cv-data-table-cell>
                 <cv-data-table-cell>{{
                   tenantName(tenants, row.owner)
@@ -112,10 +146,8 @@
                   <div v-for="a in row.allowlist" :key="a">{{ a }}</div>
                 </cv-data-table-cell>
                 <cv-data-table-cell>
-                  <span v-if="isExpired(row)" class="expired">{{
-                    $t("keys.expired")
-                  }}</span>
-                  <span v-else>{{
+                  <!-- an expired key also has the Expired tag beside its label -->
+                  <span :class="{ expired: isExpired(row) }">{{
                     row.expires ? formatExpiry(row.expires) : $t("keys.never")
                   }}</span>
                 </cv-data-table-cell>
@@ -125,7 +157,11 @@
                     : $t("keys.never_used")
                 }}</cv-data-table-cell>
                 <cv-data-table-cell class="table-overflow-menu-cell">
-                  <cv-overflow-menu flip-menu class="table-overflow-menu">
+                  <cv-overflow-menu
+                    v-if="statusOf(row) !== 'revoked'"
+                    flip-menu
+                    class="table-overflow-menu"
+                  >
                     <cv-overflow-menu-item danger @click="showRevoke(row)">
                       <NsMenuItem
                         :icon="TrashCan20"
@@ -206,6 +242,7 @@ export default {
       current: null,
       isCreateShown: false,
       isRevokeShown: false,
+      showInactive: true,
       loading: { load: false, revoke: false },
       error: { load: "", revoke: "" },
     };
@@ -236,10 +273,26 @@ export default {
         })),
       ];
     },
-    shownKeys() {
+    ownerKeys() {
       return this.q.owner
         ? this.keys.filter((k) => k.owner === this.q.owner)
         : this.keys;
+    },
+    inactiveCount() {
+      return this.ownerKeys.filter((k) => this.statusOf(k) !== "active")
+        .length;
+    },
+    shownKeys() {
+      // Revoked and expired keys are kept (DESIGN.md, Concepts): listed after
+      // the keys that work, dimmed, unless the box is unticked.
+      const active = this.ownerKeys.filter((k) => this.statusOf(k) === "active");
+      if (!this.showInactive) {
+        return active;
+      }
+      return [
+        ...active,
+        ...this.ownerKeys.filter((k) => this.statusOf(k) !== "active"),
+      ];
     },
   },
   beforeRouteEnter(to, from, next) {
@@ -252,7 +305,22 @@ export default {
     clearInterval(this.urlCheckInterval);
     next();
   },
+  watch: {
+    showInactive(value) {
+      try {
+        localStorage.setItem("dnsapi-keys-show-inactive", value ? "1" : "0");
+      } catch (e) {
+        // a per-browser convenience only
+      }
+    },
+  },
   created() {
+    try {
+      this.showInactive =
+        localStorage.getItem("dnsapi-keys-show-inactive") !== "0";
+    } catch (e) {
+      this.showInactive = true;
+    }
     this.load();
   },
   methods: {
@@ -283,6 +351,13 @@ export default {
     },
     isExpired(row) {
       return row.expires && new Date(row.expires) <= new Date();
+    },
+    statusOf(row) {
+      // the action's status, recomputed for expiry: the page may stay open
+      if (row.revoked || row.status === "revoked") {
+        return "revoked";
+      }
+      return this.isExpired(row) ? "expired" : "active";
     },
     formatTime(iso) {
       return new Date(iso).toLocaleString(undefined, {
@@ -341,5 +416,18 @@ export default {
 
 .create-button {
   margin-top: 1.5rem;
+}
+
+.key-label {
+  margin-right: $spacing-03;
+}
+
+// revoked and expired keys: kept in the list, but clearly not in use
+.inactive {
+  opacity: 0.6;
+
+  .key-label {
+    text-decoration: line-through;
+  }
 }
 </style>

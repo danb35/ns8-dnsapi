@@ -22,7 +22,8 @@
                     "expires",
                     "created",
                     "last_used",
-                    "restrict"
+                    "restrict",
+                    "status"
                 ],
                 "properties": {
                     "id": {
@@ -66,6 +67,28 @@
                             "string",
                             "null"
                         ]
+                    },
+                    "status": {
+                        "enum": [
+                            "active",
+                            "expired",
+                            "revoked"
+                        ]
+                    },
+                    "revoked": {
+                        "type": [
+                            "string",
+                            "null"
+                        ],
+                        "description": "When the key was revoked"
+                    },
+                    "revoked_reason": {
+                        "enum": [
+                            "revoked",
+                            "plain_http",
+                            null
+                        ],
+                        "description": "revoked: by an administrator or the API; plain_http: sent over plain HTTP"
                     },
                     "restrict": {
                         "type": [

@@ -9,7 +9,7 @@ It is adapted from [ns8-automx's](https://github.com/danb35/ns8-automx/tree/mast
   `$t`) and relays task results to the app, the way the shell does over its websocket.
 - `server.py` is a mock NS8 API. dnsapi's actions need a node (dnshelper, Traefik, the API
   service), so they are faked in memory: dnshelper lets dnsapi write in four zones (three in full,
-  `internal.example.net` with the ACME preset only), three tenants, five keys and some activity.
+  `internal.example.net` with the ACME preset only), three tenants, seven keys (one expired, one revoked) and some activity.
   Tenant and key views come from the module's real `dnsapi.state` code; the outputs follow each
   action's `validate-output.json`, so check them again when an output schema changes. Changes made
   through the UI are kept until the harness stops.

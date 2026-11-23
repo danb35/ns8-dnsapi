@@ -66,7 +66,7 @@ The schemas are in `imageroot/actions/<action>/validate-*.json`.
 | `assign-zone`, `unassign-zone` | `tenant`, `zone` | a zone dnshelper lets dnsapi write in; at most one tenant per zone |
 | `list-assignable-zones` | none | those zones, with `full` and their tenant |
 | `create-key` | `id`, `hash`, `owner`, `scope`, `label`, `allowlist`, `expires`, `restrict` | stores a key from its SHA-256: the action never sees the key |
-| `revoke-key`, `list-keys` | `id`; optional `owner` | |
+| `revoke-key`, `list-keys` | `id`; optional `owner` | a revoked key keeps its record, marked `revoked` (time) and `revoked_reason` (`revoked` or `plain_http`); `list-keys` returns every key with its `status` (`active`, `expired`, `revoked`) |
 | `revoke-exposed-key` | `id`, `address` | called by the API service for a valid key it received over plain HTTP; revokes operator keys too |
 | `get-overview` | none | what the Status page shows: the API's address, the dnshelper instance, how many zones, tenants and keys, and `exposed_keys`: keys revoked in the last 7 days for being sent over plain HTTP |
 | `list-activity` | optional `limit` | the most recent changes, made through the API or the actions, newest first |
@@ -88,7 +88,7 @@ are `{"error": {"code", "message", "field"}}`:
 | Status | Codes |
 |---|---|
 | 400 | `invalid_request`, `invalid_json` (with `field`), and dnshelper's `invalid_request`, `unsupported` |
-| 401 | `missing_key`, `invalid_key`, `key_expired` |
+| 401 | `missing_key`, `invalid_key`, `key_expired`, `key_revoked` |
 | 403 | `insufficient_scope`, `tenant_disabled`, `address_not_allowed`, `restricted_key`, `outside_restriction`, `reserved_name` (the API's own host name and its `_acme-challenge`), `https_required` (the request came over plain HTTP); dnshelper's `not_permitted`, `forbidden` (apex NS, SOA) |
 | 404 | `not_found`, `zone_not_found`, `tenant_not_found`, `key_not_found` |
 | 405 | `method_not_allowed` |
@@ -115,7 +115,7 @@ key cannot be used to find out which zones are managed.
 | `GET`, `POST /v1/tenants` | operator | list, add (`{"name"}`) |
 | `GET`, `PATCH`, `DELETE /v1/tenants/{id}` | operator | read, change (`{"name", "enabled"}`), remove with its keys |
 | `PUT`, `DELETE /v1/tenants/{id}/zones/{zone}` | operator | assign, unassign a zone |
-| `GET`, `POST /v1/tenants/{id}/keys` | operator | list, make a tenant key (`{"scope", "label", "allowlist", "expires", "restrict"}`); only the response holds the key |
+| `GET`, `POST /v1/tenants/{id}/keys` | operator | list (`?revoked=true` to include revoked keys; each key has a `status`: `active`, `expired` or `revoked`), make a tenant key (`{"scope", "label", "allowlist", "expires", "restrict"}`); only the response holds the key |
 | `DELETE /v1/tenants/{id}/keys/{key id}` | operator | revoke |
 | `POST /v1/acme/present`, `/v1/acme/cleanup` | write | see [ACME endpoints](#acme-endpoints) |
 

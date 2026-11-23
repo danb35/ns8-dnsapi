@@ -18,6 +18,8 @@ import time
 import unittest
 
 from dnsapi_server import keys as keyfmt
+from dnsapi_server import api as api_module
+from dnsapi_server import store as store_module
 from dnsapi_server.api import Api, client_address
 from dnsapi_server.app import make_api, make_server
 from dnsapi_server.backend import Backend, DnshelperMissing, TaskFailed, TaskRefused, Unavailable
@@ -120,7 +122,9 @@ class FakeBackend:
                 write_json(state, "keys.json", keys)
                 return {}
             if action in ("revoke-key", "revoke-exposed-key"):
-                del keys["keys"][data["id"]]
+                keys["keys"][data["id"]].update(
+                    revoked="2026-11-21T00:00:00Z",
+                    revoked_reason="plain_http" if action == "revoke-exposed-key" else "revoked")
                 write_json(state, "keys.json", keys)
                 return {}
         raise TaskFailed(f"unexpected {agent_id} {action}")
@@ -314,7 +318,7 @@ class ApiTest(unittest.TestCase):
         self.assertError(resp, body, 403, "https_required")
         self.assertEqual(self.revocations(), [("self", "revoke-exposed-key", {"id": key_id, "address": "198.51.100.7"})])
         resp, body = self.request("GET", "/v1/tenants", "operator", headers={"X-Forwarded-Proto": "https"})
-        self.assertError(resp, body, 401, "invalid_key")
+        self.assertError(resp, body, 401, "key_revoked")
         entry = self.activity()[-1]
         self.assertEqual((entry["action"], entry["key"], entry["owner"], entry["address"], entry["reason"],
                           entry["result"]),
@@ -869,7 +873,30 @@ class ApiTest(unittest.TestCase):
         resp, _ = self.request("DELETE", f"/v1/tenants/t00000002/keys/{body['id']}", "operator")
         self.assertEqual(resp.status, 204)
         resp, again = self.request("GET", "/v1/zones", key)
-        self.assertError(resp, again, 401, "invalid_key")
+        self.assertError(resp, again, 401, "key_revoked")
+        # kept as a record: listed only on request, and not revoked twice
+        resp, listed = self.request("GET", "/v1/tenants/t00000002/keys", "operator")
+        self.assertNotIn(body["id"], [k["id"] for k in listed["keys"]])
+        resp, listed = self.request("GET", "/v1/tenants/t00000002/keys?revoked=true", "operator")
+        shown = {k["id"]: k for k in listed["keys"]}
+        self.assertEqual((shown[body["id"]]["status"], shown[body["id"]]["revoked_reason"]), ("revoked", "revoked"))
+        self.assertEqual(shown[self.key_id("beta")]["status"], "active")
+        resp, again = self.request("DELETE", f"/v1/tenants/t00000002/keys/{body['id']}", "operator")
+        self.assertError(resp, again, 404, "key_not_found")
+
+    def test_revoked_key_over_plain_http_is_not_revoked_again(self):
+        self.backend.run("self", "revoke-key", {"id": self.key_id("acme")})
+        resp, body = self.request("GET", "/v1/zones", "acme", headers={"X-Forwarded-Proto": "http"})
+        self.assertError(resp, body, 403, "https_required")
+        self.assertEqual(self.revocations(), [])
+
+    def test_key_status(self):
+        resp, body = self.request("GET", "/v1/tenants/t00000001/keys", "operator")
+        self.assertEqual({k["status"] for k in body["keys"]}, {"active"})
+        self.assertTrue(all(k["revoked"] is None for k in body["keys"]))
+        self.assertEqual(api_module.key_status({"expires": "2020-01-01T00:00:00Z"}, store_module.utcnow()), "expired")
+        self.assertEqual(api_module.key_status({"expires": None, "revoked": "2026-11-21T00:00:00Z"},
+                                               store_module.utcnow()), "revoked")
 
     def test_revoke_other_tenants_key(self):
         acme_id = keyfmt.parse_key(self.keys["acme"])

@@ -11,7 +11,10 @@
 #                       "publish_host_record", "revoke_cleartext_keys"}
 #   api/tenants.json   {"tenants": {"t1a2b3c4d": {"name", "enabled", "zones", "created"}}}
 #   api/keys.json      {"keys": {"a1b2c3d4": {"owner", "scope", "hash", "label",
-#                                         "allowlist", "expires", "created"}}}
+#                                         "allowlist", "expires", "created",
+#                                         "revoked", "revoked_reason"}}}
+#                  A revoked key keeps its record, with the time it was revoked,
+#                  so that it can still be listed; it is refused like an unknown one.
 #   api/runtime.json   {"dnshelper": "module/dnshelper1" | null, "proxies_depth": 0}
 #                  (bin/discover-runtime; not backed up: it is recomputed)
 #   usage/last-used.json   written by the service
@@ -235,6 +238,35 @@ def tenant_view(tenant_id, tenant):
     }
 
 
+def key_status(record, when=None):
+    """"revoked", "expired" or "active"."""
+    if record.get("revoked"):
+        return "revoked"
+    expires = record.get("expires")
+    if expires and expires <= (when or now()):
+        return "expired"
+    return "active"
+
+
+def active_keys(all_keys):
+    """The keys that still work (neither revoked nor expired)."""
+    stamp = now()
+    return {k: r for k, r in all_keys.items() if key_status(r, stamp) == "active"}
+
+
+def revoke_key(key_id, reason):
+    """Mark a key revoked (the caller holds locked()). Return its record, or None
+    when there is no such key or it is already revoked."""
+    all_keys = keys()
+    record = all_keys.get(key_id)
+    if record is None or record.get("revoked"):
+        return None
+    record["revoked"] = now()
+    record["revoked_reason"] = reason
+    save_keys(all_keys)
+    return record
+
+
 def key_view(key_id, record, used=None):
     return {
         "id": key_id,
@@ -246,6 +278,9 @@ def key_view(key_id, record, used=None):
         "restrict": record.get("restrict"),
         "created": record.get("created"),
         "last_used": (used or {}).get(key_id),
+        "status": key_status(record),
+        "revoked": record.get("revoked"),
+        "revoked_reason": record.get("revoked_reason"),
     }
 
 

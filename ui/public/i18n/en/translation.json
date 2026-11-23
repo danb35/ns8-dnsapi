@@ -201,6 +201,10 @@
         "never": "Never",
         "never_used": "Not used yet",
         "expired": "Expired",
+        "revoked": "Revoked",
+        "revoked_on": "Revoked {time}",
+        "revoked_plain_http": "Revoked {time}: it was sent over plain HTTP",
+        "show_inactive": "Show revoked and expired keys ({count})",
         "revoke": "Revoke",
         "revoke_title": "Revoke key",
         "revoke_description": "The key {label} of {owner} stops working at once. This cannot be undone."

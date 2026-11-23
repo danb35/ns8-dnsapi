@@ -176,12 +176,18 @@ the system that uses it before closing the dialog. The page lists the keys, with
 last used; **Revoke** stops a key at once. If a key may have leaked, revoke it and make another.
 **Show keys** on the Tenants page lists one tenant's keys.
 
+Revoked and expired keys stay in the list, after the keys that work, greyed out and struck
+through, with a **Revoked** or **Expired** tag; a revoked key also shows when it was revoked, and
+whether it was for being sent over plain HTTP. Untick **Show revoked and expired keys** to hide
+them (your browser remembers the choice). A revoked key cannot be brought back; removing a
+tenant removes its keys from the list too.
+
 ### Keys sent over plain HTTP
 
 A client set up with `http://` instead of `https://` sends its key unencrypted, where anyone on the
 network path can read it. dnsapi refuses such a request with `403 https_required`, and, unless you
 turn **Revoke keys sent over plain HTTP** off in Settings, revokes the key at once, operator keys
-included. The client then gets `401 invalid_key` over HTTPS too: make a new key and set the
+included. The client then gets `401 key_revoked` over HTTPS too: make a new key and set the
 client to the `https://` address.
 
 Only a complete, valid key is revoked: a request that merely names a key's id, which is not
@@ -377,9 +383,10 @@ own, so that a key does not reveal which zones you manage.
 crossed the network unencrypted and has been revoked (see
 [Keys sent over plain HTTP](#keys-sent-over-plain-http)): make another.
 
-**A key stopped working (`401 invalid_key`) and nobody revoked it**: look at the **Status** and
-**Activity** pages. It was probably sent over plain HTTP and revoked; the client must use
-`https://`.
+**A key stopped working (`401 key_revoked`) and nobody revoked it**: look at the **Keys**,
+**Status** and **Activity** pages. It was probably sent over plain HTTP and revoked (the Keys page
+says so beside it); the client must use `https://`. `401 invalid_key` means the key was never
+valid here, or belonged to a tenant that was removed.
 
 **`403 reserved_name`**: the record is the API's own host name, or its `_acme-challenge`; change
 it on dnshelper's Records page.

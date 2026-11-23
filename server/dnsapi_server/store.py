@@ -12,7 +12,8 @@
 #   settings.json  configure-module: host, rate_limit, ...
 #   tenants.json   {"tenants": {"t1a2b3c4d": {"name", "enabled", "zones", "created"}}}
 #   keys.json      {"keys": {"a1b2c3d4": {"owner", "scope", "hash", "label",
-#                                         "allowlist", "expires", "created"}}}
+#                                         "allowlist", "expires", "created",
+#                                         "revoked", "revoked_reason"}}}
 #   runtime.json   bin/discover-runtime: {"dnshelper": "module/dnshelper1" | null,
 #                                         "proxies_depth": 0}
 

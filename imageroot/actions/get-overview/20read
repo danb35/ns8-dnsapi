@@ -20,7 +20,7 @@ from dnsapi import dnshelper, state
 
 settings = state.load_settings()
 tenants = state.tenants()
-keys = state.keys()
+keys = state.active_keys(state.keys())
 rdb = agent.redis_connect(use_replica=True)
 target = dnshelper.find_instance(rdb)
 result = {

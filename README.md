@@ -28,7 +28,10 @@ client for its API.
 
 ## Status
 
-Not released yet. Steps 1 to 8 of DESIGN.md's build order are done: the API behind Traefik on its
+Released for testing: [0.1.0-testing.1](https://github.com/danb35/ns8-dnsapi/releases/tag/0.1.0-testing.1)
+is the first release, a pre-release listed in the
+[danb35 software repository](https://github.com/danb35/ns8-repomd). There is no stable release
+yet. Steps 1 to 8 of DESIGN.md's build order are done: the API behind Traefik on its
 own host name; tenants, keys, authentication and rate limits; reading and changing records; ACME
 DNS-01; the admin UI (Status, Tenants, Keys, Activity, Settings) and the OpenAPI document; a full
 node test; the API's host name published through dnshelper; and the hardening from a security
@@ -37,14 +40,19 @@ built. Hardening that was considered and not built is listed in DESIGN.md, "Furt
 
 ## Install
 
-dnshelper 0.7.0 or later must be installed for dnsapi to reach any zone (NS8 has no dependencies
+dnshelper 0.7.0 or later, from NethForge, must be installed for dnsapi to reach any zone (NS8 has no dependencies
 between modules, so this is not enforced at install).
 
-    add-module ghcr.io/danb35/dnsapi:latest 1
+From the software center: add the repository `https://danb35.github.io/ns8-repomd/` (Settings →
+Software repositories), turn on **Testing** for it, since only testing releases exist so far,
+and install dnsapi. From a shell on the leader node:
+
+    add-module ghcr.io/danb35/dnsapi:0.1.0-testing.1 1
     api-cli run module/dnsapi1/configure-module --data '{"host": "dnsapi.example.com", "lets_encrypt": true}'
     runagent -m dnsapi1 create-key --owner operator --scope write --label "first key"
 
-The user guide has the details. To remove an instance: `remove-module --no-preserve dnsapi1`.
+`ghcr.io/danb35/dnsapi:latest` is the master branch, which may be ahead of the last release. The
+user guide has the details. To remove an instance: `remove-module --no-preserve dnsapi1`.
 
 ## Actions
 

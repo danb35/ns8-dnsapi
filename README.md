@@ -28,7 +28,7 @@ client for its API.
 
 ## Status
 
-Released for testing: [0.1.0-testing.1](https://github.com/danb35/ns8-dnsapi/releases/tag/0.1.0-testing.1)
+Released for testing: [0.1.0-testing.2](https://github.com/danb35/ns8-dnsapi/releases/tag/0.1.0-testing.2)
 is the first release, a pre-release listed in the
 [danb35 software repository](https://github.com/danb35/ns8-repomd). There is no stable release
 yet. Steps 1 to 8 of DESIGN.md's build order are done: the API behind Traefik on its
@@ -47,7 +47,7 @@ From the software center: add the repository `https://danb35.github.io/ns8-repom
 Software repositories), turn on **Testing** for it, since only testing releases exist so far,
 and install dnsapi. From a shell on the leader node:
 
-    add-module ghcr.io/danb35/dnsapi:0.1.0-testing.1 1
+    add-module ghcr.io/danb35/dnsapi:0.1.0-testing.2 1
     api-cli run module/dnsapi1/configure-module --data '{"host": "dnsapi.example.com", "lets_encrypt": true}'
     runagent -m dnsapi1 create-key --owner operator --scope write --label "first key"
 

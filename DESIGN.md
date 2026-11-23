@@ -164,13 +164,23 @@ make it safe and easy:
        contains the value in quotes, so both endpoints answer with `{"fqdn", "value", "zone",
        "changes"}`.
      - Caddy (checked 2026-11-22 against `caddy-dns/acmeproxy` v1.1.1 and the
-       `libdns/acmeproxy` it uses, not run): Caddy does not use lego; its DNS modules are libdns
+       `libdns/acmeproxy` it uses; run 2026-11-23, see below): Caddy does not use lego; its DNS modules are libdns
        providers, and the `acmeproxy` one, which standard Caddy builds do not include, sends the
        same requests, with `fqdn` built by `libdns.AbsoluteName` (trailing dot), and Basic
        authentication when a user name or password is set. It accepts only 200, and only a JSON
        reply whose `fqdn` and `value` equal what it sent, so both endpoints echo them as received.
-   - certbot has no such plugin: the user guide shows `--manual-auth-hook` and
-     `--manual-cleanup-hook` scripts that call the REST API with curl.
+       Tested by the operator (2026-11-23): Caddy 2.11.9 with `caddy-dns/acmeproxy` and an
+       ACME-restricted tenant key, against `dnsapi1` on the test node (`dnsapi:latest`, master at
+       `a0b668d`), obtained a production Let's Encrypt certificate; the key's last-used time
+       showed on the Keys page.
+   - certbot has no such plugin: the user guide shows a `--manual-auth-hook` and
+     `--manual-cleanup-hook` script that calls `/v1/acme/present` and `/cleanup` with curl.
+     Tested 2026-11-23: certbot 4.0.0 on Debian 13, the guide's script unchanged, the same
+     ACME-restricted key as the Caddy test, Let's Encrypt's staging CA, one certificate for
+     `caddy-test.2v6.in` and `*.caddy-test.2v6.in`. Both values were at the same name at once,
+     each was removed on its own, and no record was left; two add and two delete audit lines, in
+     dnsapi's log and in dnshelper's (with `on_behalf_of`). It took 2 minutes, mostly the
+     script's 30-second wait after each value.
 
 A typical setup for internal hosts:
 - on dnshelper's Access page, the ACME preset for `module/dnsapi1` on the zones concerned;

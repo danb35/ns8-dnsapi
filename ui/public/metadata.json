@@ -1,7 +1,17 @@
 {
   "name": "dnsapi",
   "description": {
-    "en": "HTTPS API for managing customers' DNS records through dnshelper"
+    "en": "HTTPS API that lets billing portals, customers' scripts and ACME DNS-01 clients manage DNS records through dnshelper",
+    "ar": "واجهة برمجة HTTPS تتيح لبوابات الفوترة والنصوص البرمجية للعملاء وعملاء ACME DNS-01 إدارة سجلات DNS عبر dnshelper",
+    "de": "HTTPS-API, mit der Abrechnungsportale, Skripte von Kunden und ACME-DNS-01-Clients DNS-Einträge über dnshelper verwalten",
+    "es": "API HTTPS que permite a portales de facturación, scripts de sus clientes y clientes ACME DNS-01 gestionar registros DNS a través de dnshelper",
+    "eu": "Fakturazio-atariek, bezeroen scriptek eta ACME DNS-01 bezeroek DNS erregistroak dnshelper bidez kudeatzeko HTTPS APIa",
+    "fr": "API HTTPS qui permet aux portails de facturation, aux scripts de vos clients et aux clients ACME DNS-01 de gérer des enregistrements DNS via dnshelper",
+    "it": "API HTTPS con cui portali di fatturazione, script dei clienti e client ACME DNS-01 gestiscono i record DNS tramite dnshelper",
+    "pt": "API HTTPS que permite a portais de faturação, scripts dos seus clientes e clientes ACME DNS-01 gerir registos DNS através do dnshelper",
+    "pt_BR": "API HTTPS que permite que portais de cobrança, scripts dos seus clientes e clientes ACME DNS-01 gerenciem registros DNS por meio do dnshelper",
+    "ta": "பில்லிங் போர்டல்கள், வாடிக்கையாளர்களின் ஸ்கிரிப்டுகள் மற்றும் ACME DNS-01 கிளையண்டுகள் dnshelper வழியாக DNS பதிவுகளை நிர்வகிக்க உதவும் HTTPS API",
+    "uk": "HTTPS API, через який білінгові портали, скрипти клієнтів і клієнти ACME DNS-01 керують записами DNS за допомогою dnshelper"
   },
   "categories": [
     "system_administration"

@@ -147,8 +147,18 @@ def get_configuration(data):
 
 
 def configure_module(data):
-    SETTINGS.update({k: v for k, v in (data or {}).items() if k in SETTINGS})
+    data = data or {}
     time.sleep(1)  # set-route takes a while
+    # A host name starting with "norule." in example.com acts as one dnshelper has no rule for:
+    # the host record is saved as not_permitted, then the certificate fails and nothing else is
+    if data.get("host", "").startswith("norule.") and data.get("publish_host_record"):
+        HOST_RECORD.clear()
+        HOST_RECORD.update({"host": data["host"], "target": NODE_FQDN, "zone": "example.com",
+                            "status": "not_permitted", "existing": [], "message": "",
+                            "checked": "2026-11-22T10:00:00Z"})
+        if data.get("lets_encrypt"):
+            raise Refused("host", "newcert_acme_error", data["host"])
+    SETTINGS.update({k: v for k, v in data.items() if k in SETTINGS})
     return None
 
 

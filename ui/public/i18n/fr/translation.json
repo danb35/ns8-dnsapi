@@ -252,7 +252,7 @@
         "title_not_managed": "La zone du nom d'hôte n'est pas dans dnshelper",
         "description_not_managed": "Ajoutez chez votre hébergeur DNS un enregistrement pour {host} qui pointe vers ce nœud.",
         "title_not_permitted": "dnsapi ne peut pas publier le nom d'hôte",
-        "description_not_permitted": "Pour que dnsapi ajoute le CNAME, ajoutez une règle sur la page Accès de dnshelper pour la zone {zone} : écriture, nom {name}, type CNAME. Ou ajoutez vous-même un enregistrement pour {host} qui pointe vers ce nœud.",
+        "description_not_permitted": "Pour que dnsapi ajoute le CNAME, ajoutez une règle sur la page Accès de dnshelper pour la zone {zone} : écriture, nom {name}, type CNAME. Ou ajoutez vous-même un enregistrement pour {host} qui pointe vers ce nœud. dnsapi ne vérifie à nouveau qu'à l'enregistrement des Paramètres : enregistrez-les de nouveau une fois la règle ajoutée.",
         "title_apex": "Le nom d'hôte est l'apex d'une zone",
         "description_apex": "{host} ne peut pas avoir de CNAME. Ajoutez vous-même un enregistrement A ou AAAA qui pointe vers ce nœud.",
         "title_error": "L'enregistrement DNS du nom d'hôte n'a pas pu être vérifié",

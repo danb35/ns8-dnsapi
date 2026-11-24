@@ -252,7 +252,7 @@
         "title_not_managed": "A zona do nome de anfitrião não está no dnshelper",
         "description_not_managed": "Adicione no seu fornecedor de DNS um registo para {host} que aponte para este nó.",
         "title_not_permitted": "O dnsapi não pode publicar o nome de anfitrião",
-        "description_not_permitted": "Para o dnsapi adicionar o CNAME, adicione uma regra na página Acesso do dnshelper para a zona {zone}: escrita, nome {name}, tipo CNAME. Ou adicione manualmente um registo para {host} que aponte para este nó.",
+        "description_not_permitted": "Para o dnsapi adicionar o CNAME, adicione uma regra na página Acesso do dnshelper para a zona {zone}: escrita, nome {name}, tipo CNAME. Ou adicione manualmente um registo para {host} que aponte para este nó. O dnsapi só volta a verificar quando as Definições são guardadas: guarde-as novamente depois de adicionar a regra.",
         "title_apex": "O nome de anfitrião é o ápice de uma zona",
         "description_apex": "{host} não pode ter um CNAME. Adicione manualmente um registo A ou AAAA que aponte para este nó.",
         "title_error": "Não foi possível verificar o registo DNS do nome de anfitrião",

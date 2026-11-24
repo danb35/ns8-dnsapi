@@ -208,7 +208,12 @@ export default {
     this.getConfiguration();
   },
   methods: {
-    async getConfiguration() {
+    /**
+     * Read the configuration. With hostRecordOnly, only the host name's DNS
+     * record is updated: after a failed save, configure-module has recorded
+     * what it found for it, but nothing else, and the form keeps what was typed.
+     */
+    async getConfiguration(hostRecordOnly = false) {
       this.loading.getConfiguration = true;
       this.error.getConfiguration = "";
       const taskAction = "get-configuration";
@@ -223,7 +228,10 @@ export default {
       // register to task completion
       this.core.$root.$once(
         `${taskAction}-completed-${eventId}`,
-        this.getConfigurationCompleted
+        (taskContext, taskResult) =>
+          hostRecordOnly
+            ? this.hostRecordCompleted(taskResult)
+            : this.getConfigurationCompleted(taskContext, taskResult)
       );
 
       const res = await to(
@@ -263,6 +271,10 @@ export default {
       this.hostRecord = config.host_record;
       this.focusElement("host");
     },
+    hostRecordCompleted(taskResult) {
+      this.loading.getConfiguration = false;
+      this.hostRecord = taskResult.output.host_record;
+    },
     validateConfigureModule() {
       this.clearErrors(this);
       let isValidationOk = true;
@@ -287,6 +299,9 @@ export default {
     },
     configureModuleValidationFailed(validationErrors) {
       this.loading.configureModule = false;
+      // A certificate that could not be issued is reported here; the host
+      // record's notice often says why (no rule for the CNAME, for example)
+      this.getConfiguration(true);
       let focusAlreadySet = false;
 
       for (const validationError of validationErrors) {
@@ -367,6 +382,7 @@ export default {
       console.error(`${taskContext.action} aborted`, taskResult);
       this.error.configureModule = this.$t("error.generic_error");
       this.loading.configureModule = false;
+      this.getConfiguration(true);
     },
     configureModuleCompleted() {
       this.loading.configureModule = false;

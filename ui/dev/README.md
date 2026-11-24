@@ -28,6 +28,10 @@ docker run --rm -v "$PWD:/usr/src" -w /usr/src/ui -e NODE_OPTIONS=--openssl-lega
     sh -c "npm install -g corepack@0.36.0 && corepack enable && yarn install && yarn build"
 ```
 
+Saving Settings with a host name starting with `norule.` (such as `norule.example.com`) acts
+as a node where dnshelper has no rule for the host record: the record is reported as not
+permitted and, with Let's Encrypt on, the save fails with a certificate error.
+
 `CORE_CSS` is the NS8 core UI's stylesheet: the concatenation of its `css/app~*.css` files, for
 example `ssh root@<node> 'cat /var/lib/nethserver/cluster/ui/css/app~*.css' > core.css`. Without
 it the app renders without the shell's Carbon styles.

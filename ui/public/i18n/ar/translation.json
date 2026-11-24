@@ -252,7 +252,7 @@
         "title_not_managed": "منطقة اسم المضيف ليست في dnshelper",
         "description_not_managed": "أضف لدى مزوّد DNS سجلًا لـ {host} يشير إلى هذه العقدة.",
         "title_not_permitted": "لا يمكن لـ dnsapi نشر اسم المضيف",
-        "description_not_permitted": "ليتمكن dnsapi من إضافة CNAME، أضف قاعدة في صفحة Access في dnshelper للمنطقة {zone}: كتابة، الاسم {name}، النوع CNAME. أو أضف بنفسك سجلًا لـ {host} يشير إلى هذه العقدة.",
+        "description_not_permitted": "ليتمكن dnsapi من إضافة CNAME، أضف قاعدة في صفحة Access في dnshelper للمنطقة {zone}: كتابة، الاسم {name}، النوع CNAME. أو أضف بنفسك سجلًا لـ {host} يشير إلى هذه العقدة. لا يتحقق dnsapi مجددًا إلا عند حفظ الإعدادات: احفظها مرة أخرى بعد إضافة القاعدة.",
         "title_apex": "اسم المضيف هو جذر منطقة",
         "description_apex": "لا يمكن أن يكون لـ {host} سجل CNAME. أضف بنفسك سجل A أو AAAA يشير إلى هذه العقدة.",
         "title_error": "تعذّر التحقق من سجل DNS لاسم المضيف",

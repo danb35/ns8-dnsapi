@@ -252,7 +252,7 @@
         "title_not_managed": "Die Zone des Hostnamens ist nicht in dnshelper",
         "description_not_managed": "Legen Sie bei Ihrem DNS-Anbieter einen Eintrag für {host} an, der auf diesen Knoten zeigt.",
         "title_not_permitted": "dnsapi darf den Hostnamen nicht veröffentlichen",
-        "description_not_permitted": "Damit dnsapi den CNAME anlegen kann, fügen Sie auf der Seite Zugriff von dnshelper eine Regel für die Zone {zone} hinzu: Schreiben, Name {name}, Typ CNAME. Oder legen Sie selbst einen Eintrag für {host} an, der auf diesen Knoten zeigt.",
+        "description_not_permitted": "Damit dnsapi den CNAME anlegen kann, fügen Sie auf der Seite Zugriff von dnshelper eine Regel für die Zone {zone} hinzu: Schreiben, Name {name}, Typ CNAME. Oder legen Sie selbst einen Eintrag für {host} an, der auf diesen Knoten zeigt. dnsapi prüft erneut nur beim Speichern der Einstellungen: Speichern Sie sie erneut, sobald die Regel besteht.",
         "title_apex": "Der Hostname ist der Apex einer Zone",
         "description_apex": "{host} kann keinen CNAME haben. Legen Sie selbst einen A- oder AAAA-Eintrag dafür an, der auf diesen Knoten zeigt.",
         "title_error": "Der DNS-Eintrag des Hostnamens konnte nicht geprüft werden",

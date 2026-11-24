@@ -252,7 +252,7 @@
         "title_not_managed": "Ostalari-izenaren zona ez dago dnshelper-en",
         "description_not_managed": "Gehitu zure DNS hornitzailean {host}-(e)rako erregistro bat nodo honetara seinalatzen duena.",
         "title_not_permitted": "dnsapi-k ezin du ostalari-izena argitaratu",
-        "description_not_permitted": "dnsapi-k CNAMEa gehi dezan, gehitu arau bat dnshelper-en Access orrian {zone} zonarako: idazketa, {name} izena, CNAME mota. Edo gehitu zuk zeuk {host}-(e)rako erregistro bat nodo honetara seinalatzen duena.",
+        "description_not_permitted": "dnsapi-k CNAMEa gehi dezan, gehitu arau bat dnshelper-en Access orrian {zone} zonarako: idazketa, {name} izena, CNAME mota. Edo gehitu zuk zeuk {host}-(e)rako erregistro bat nodo honetara seinalatzen duena. dnsapi-k ezarpenak gordetzean soilik egiaztatzen du berriro: gorde itzazu berriro araua gehitu ondoren.",
         "title_apex": "Ostalari-izena zona baten apexa da",
         "description_apex": "{host}-(e)k ezin du CNAMErik izan. Gehitu zuk zeuk A edo AAAA erregistro bat nodo honetara seinalatzen duena.",
         "title_error": "Ezin izan da ostalari-izenaren DNS erregistroa egiaztatu",

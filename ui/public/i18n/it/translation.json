@@ -252,7 +252,7 @@
         "title_not_managed": "La zona del nome host non è in dnshelper",
         "description_not_managed": "Aggiungi presso il tuo provider DNS un record per {host} che punti a questo nodo.",
         "title_not_permitted": "dnsapi non può pubblicare il nome host",
-        "description_not_permitted": "Perché dnsapi aggiunga il CNAME, aggiungi una regola nella pagina Accesso di dnshelper per la zona {zone}: scrittura, nome {name}, tipo CNAME. Oppure aggiungi tu un record per {host} che punti a questo nodo.",
+        "description_not_permitted": "Perché dnsapi aggiunga il CNAME, aggiungi una regola nella pagina Accesso di dnshelper per la zona {zone}: scrittura, nome {name}, tipo CNAME. Oppure aggiungi tu un record per {host} che punti a questo nodo. dnsapi ricontrolla solo quando le Impostazioni vengono salvate: salvale di nuovo dopo aver aggiunto la regola.",
         "title_apex": "Il nome host è l'apice di una zona",
         "description_apex": "{host} non può avere un CNAME. Aggiungi tu un record A o AAAA che punti a questo nodo.",
         "title_error": "Impossibile verificare il record DNS del nome host",

@@ -97,8 +97,14 @@ host name relative to the zone (`dnsapi` for `dnsapi.example.com`), type `CNAME`
 - the zone is not in dnshelper, there is no rule, or the host name is a zone's apex (which
   cannot have a CNAME): add the record yourself at your DNS host.
 
-None of these stops the settings from being saved. If you change the host name, the old name's
-record stays; remove it on dnshelper's Records page, where it is listed as dnsapi's.
+None of these stops the settings from being saved by itself. But if you asked for a Let's
+Encrypt certificate and the record could not be added, the certificate usually cannot be issued,
+and then nothing is saved: Settings shows the certificate error with what dnsapi found about the
+record. dnsapi checks the record only when Settings is saved, so once you have added the rule on
+dnshelper's Access page (or the record yourself), save Settings again.
+
+If you change the host name, the old name's record stays; remove it on dnshelper's Records page,
+where it is listed as dnsapi's.
 
 No API key can change the records of the API's own host name, or of `_acme-challenge` at that
 name, even when its zone belongs to a tenant: a customer could otherwise point the API elsewhere

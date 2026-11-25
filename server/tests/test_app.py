@@ -893,8 +893,11 @@ class ApiTest(unittest.TestCase):
     def test_update_tenant_key(self):
         key_id = self.key_id("beta")
         path = f"/v1/tenants/t00000002/keys/{key_id}"
-        resp, body = self.request("PATCH", path, "operator",
-                                  body={"label": "new label", "allowlist": ["192.0.2.0/24"]})
+        logging.disable(logging.NOTSET)
+        with self.assertLogs("dnsapi", logging.INFO) as logged:
+            resp, body = self.request("PATCH", path, "operator",
+                                      body={"label": "new label", "allowlist": ["192.0.2.0/24"]})
+        line = [entry for entry in logged.output if "update-key" in entry][-1]
         self.assertEqual(resp.status, 200, body)
         self.assertEqual((body["label"], body["allowlist"], body["scope"]), ("new label", ["192.0.2.0/24"], "write"))
         self.assertEqual(body["modified"], "2026-11-25T00:00:00Z")
@@ -903,6 +906,10 @@ class ApiTest(unittest.TestCase):
         entry = self.activity()[-1]
         self.assertEqual((entry["action"], entry["target_key"], entry["tenant"]), ("update-key", key_id, "t00000002"))
         self.assertEqual(entry["changes"]["allowlist"], [[], ["192.0.2.0/24"]])
+        # the journal line names the acting key as key and the changed one as target_key
+        self.assertEqual(len(re.findall(r'\bkey="', line)), 1)
+        self.assertIn(f' key="{self.key_id("operator")}"', line)
+        self.assertIn(f'target_key="{key_id}"', line)
         # the new allowlist applies at once (the test client is 127.0.0.1)
         resp, again = self.request("GET", "/v1/zones", "beta")
         self.assertError(resp, again, 403, "address_not_allowed")

@@ -794,8 +794,11 @@ wraps the task events in one promise, as theirs do):
      allowlist. A revoked key: 404 through the API, `key_revoked` from the action. Each change
      gave the action's and the service's audit lines and an Activity entry with the old and new
      values. Removed afterwards: the tenant with its key; the operator key is revoked, and
-     listed as such. Not tested on the node: the Edit dialog (the browser pane refuses the
-     node's certificate; checked in the `ui/dev` harness).
+     listed as such. The operator then tried the Edit dialog in the cluster admin UI on the
+     same instance; it worked as expected.
+   - Found on the node and fixed: the service's journal lines for key actions (`create-key`,
+     `update-key`, `revoke-key`) had `key=` twice, the acting key and then the key acted on.
+     The second is now `target_key=`, as it already was on the Activity page.
 10. Phase 2 (delegated zones), then phase 3 (PowerDNS hosting), as needed.
 
 ## Further hardening (not built)

@@ -862,12 +862,13 @@ class Api:
         return HTTPStatus.NO_CONTENT, None
 
     def audit(self, req, action, **fields):
+        # "key" is who acted; a key the operator made, changed or revoked is
+        # "target_key", in the journal line as on the Activity page.
+        extra = {("target_key" if k == "key" else k): v for k, v in fields.items()}
         details = " ".join(f'{k}="{v}"' if isinstance(v, str) else f"{k}={json.dumps(v)}"
-                           for k, v in fields.items())
+                           for k, v in extra.items())
         log.info('dnsapi audit: key="%s" owner="%s" address="%s" action="%s" %s result="ok"',
                  req.principal.key_id, req.principal.owner, req.client_ip, action, details)
-        # "key" is who acted; a key the operator made or revoked is "target_key"
-        extra = {("target_key" if k == "key" else k): v for k, v in fields.items()}
         self.store.append_activity({
             "source": "api", "key": req.principal.key_id, "owner": req.principal.owner,
             "address": req.client_ip, "action": action, "result": "ok", **extra,

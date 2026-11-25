@@ -20,7 +20,7 @@ import time
 from http import HTTPStatus
 
 from . import keys as keyfmt
-from .backend import DnshelperMissing, TaskFailed, TaskRefused, TaskTimeout, Unavailable
+from .backend import DnshelperMissing, NotGranted, TaskFailed, TaskRefused, TaskTimeout, Unavailable
 from .store import isoformat, parse_time
 
 log = logging.getLogger("dnsapi")
@@ -33,6 +33,10 @@ EDITABLE_KEY_FIELDS = ("label", "allowlist", "expires")
 ZONE_RE = re.compile(r"^(?=.{3,253}$)([a-z0-9_]([a-z0-9_-]{0,61}[a-z0-9_])?\.)+[a-z0-9-]{2,63}$")
 RECORD_TYPE_RE = re.compile(r"^[A-Za-z0-9]{1,10}$")
 ZONES_CACHE_SECONDS = 30.0
+# dnshelper's provider list is its built-in registry: it changes only when dnshelper is updated.
+PROVIDERS_CACHE_SECONDS = 600.0
+PROVIDER_KEYS = ("name", "label", "notes", "types", "fields")
+PROVIDER_FIELD_KEYS = ("name", "label", "secret", "required", "default")
 MAX_RECORDS = 100  # dnshelper's limit per change
 RECORD_FIELDS = {"name", "type", "ttl", "data"}
 
@@ -208,6 +212,7 @@ class Api:
         self.max_failures = max_failures
         self.clock = clock
         self.zones_cache = None  # (time, [zones])
+        self.providers_cache = None  # (time, [providers])
         self.task_slots = threading.BoundedSemaphore(MAX_TASKS)
         self.in_flight = {}  # key id -> requests in progress
         self.in_flight_lock = threading.Lock()
@@ -398,6 +403,11 @@ class Api:
         except TaskFailed:
             raise ApiError(HTTPStatus.BAD_GATEWAY, "upstream_error",
                            "The DNS host could not complete the request")
+        except NotGranted as exc:
+            log.error("%s", exc)
+            raise ApiError(HTTPStatus.SERVICE_UNAVAILABLE, "not_granted",
+                           f"dnshelper does not let this module run {action}; dnshelper may need updating",
+                           headers={"Retry-After": "300"})
         except Unavailable as exc:
             log.error("%s", exc)
             raise ApiError(HTTPStatus.SERVICE_UNAVAILABLE, "unavailable",
@@ -461,6 +471,28 @@ class Api:
             elif assigned.get(zone) == req.principal.owner:
                 result.append({"zone": zone, "provider": z.get("provider"), "full": bool(z.get("full"))})
         return HTTPStatus.OK, {"zones": result}
+
+    def list_providers(self, req):
+        """The DNS hosts dnshelper supports and the credential fields each one takes
+        (DESIGN.md, Providers). The same for every caller and nothing about the
+        administrator's credentials, but only operator keys need it."""
+        if not req.principal.is_operator:
+            raise ApiError(HTTPStatus.NOT_FOUND, "not_found", "No such endpoint")
+        with self.zones_lock:
+            cached = self.providers_cache
+            if cached and self.clock() - cached[0] < PROVIDERS_CACHE_SECONDS:
+                return HTTPStatus.OK, {"providers": cached[1]}
+        self.charge(req)
+        output = self.dnshelper(req, "list-providers", {})
+        providers = []
+        for p in output.get("providers", []):
+            # Only the fields documented in openapi.json: a later dnshelper may add more.
+            item = {k: p[k] for k in PROVIDER_KEYS if k in p and k != "fields"}
+            item["fields"] = [{k: f[k] for k in PROVIDER_FIELD_KEYS if k in f} for f in p.get("fields", [])]
+            providers.append(item)
+        with self.zones_lock:
+            self.providers_cache = (self.clock(), providers)
+        return HTTPStatus.OK, {"providers": providers}
 
     def get_records(self, req):
         zone = self.reachable_zone(req)
@@ -885,6 +917,7 @@ ROUTES = [
     (rf"/v1/zones/{ZONE}/changes", {"POST": "apply_changes"}),
     (rf"/v1/zones/{ZONE}/rrsets", {"PUT": "set_rrsets"}),
     (rf"/v1/zones/{ZONE}/propagation", {"GET": "get_propagation"}),
+    (r"/v1/providers", {"GET": "list_providers"}),
     (r"/v1/acme/present", {"POST": "acme_present"}),
     (r"/v1/acme/cleanup", {"POST": "acme_cleanup"}),
     (r"/v1/tenants", {"GET": "list_tenants", "POST": "add_tenant"}),

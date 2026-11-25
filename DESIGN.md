@@ -13,7 +13,8 @@ or on a node.
 Status: build order steps 1 to 8 are done (the service and its route; tenants, keys,
 authentication, rate limits and the read endpoints; the write endpoints; ACME DNS-01; the admin
 UI and the OpenAPI document; the full node test; the API host name in DNS; the hardening from the
-security review); step 9 (editable keys) is done. dnshelper's side, phase 1, is released in dnshelper 0.7.0 (2026-11-21), which this
+security review); step 9 (editable keys) is done; step 10 (the provider list) is built, not yet
+tested on a node. dnshelper's side, phase 1, is released in dnshelper 0.7.0 (2026-11-21), which this
 module needs at least.
 
 Origin: forum request, community.nethserver.org topic 28774, posts 32-37 (2026-11-18/20). The
@@ -124,6 +125,7 @@ and SOA read-only.
 | `PUT /v1/zones/{zone}/rrsets` `{records, dry_run}` | write | `set-records` mode `rrset` |
 | `DELETE /v1/zones/{zone}/records` `{records, dry_run}` | write | `delete-records` |
 | `GET /v1/zones/{zone}/propagation?name=&type=` | any | `check-propagation` (in dnshelper's `dnsreader` role since 0.7.0) |
+| `GET /v1/providers` | operator | `list-providers` (in dnshelper's `dnsreader` role after 0.7.0; see [Providers](#providers)) |
 | `GET/POST/PATCH/DELETE /v1/tenants[/{id}]` | operator | none (dnsapi's own state) |
 | `PUT/DELETE /v1/tenants/{id}/zones/{zone}` | operator | `list-zones` checks that dnsapi may write in it (`access: "write"`; `full` or not) |
 | `POST/PATCH/DELETE /v1/tenants/{id}/keys[/{key id}]` | operator | none (`PATCH` changes only `label`, `allowlist`, `expires`) |
@@ -135,6 +137,33 @@ find out which zones are managed.
 
 Phase 2 adds `POST /v1/zones` (add a domain with a provider and credentials) and `DELETE
 /v1/zones/{zone}`, using dnshelper's delegated-zone actions.
+
+## Providers
+
+Request (2026-11-25, forum topic 29504, post 7, the operator): the portal should be able to list
+the DNS hosts it can offer from dnsapi itself, so that a host added to dnshelper appears without
+anyone keeping a list by hand. It is the first piece of phase 2 (adding domains and their
+credentials through the API), which the same post asks for; only the list is built.
+
+- `GET /v1/providers` returns dnshelper's `list-providers`: each DNS host's `name` (as in a
+  zone's `provider`), `label`, `notes`, the record `types` it supports, and the credential
+  `fields` it takes (`name`, `label`, `secret`, `required`, `default`). dnsapi passes on only
+  those keys, so what a later dnshelper adds is not exposed until it is documented here.
+- Operator keys only, restricted ones included: the list is dnshelper's built-in registry, the
+  same for every caller, and says nothing about the administrator's credentials or zones. A tenant
+  key gets 404, as for the other operator endpoints. Configured credentials are not listed: they
+  are the administrator's, and phase 2 lets a delegate use only the ones it made.
+- Cached for 10 minutes (the list changes only when dnshelper is updated); a miss counts once
+  against the key's rate limit.
+- dnshelper needed a change: `list-providers` was admin only until 0.7.0, and is now in
+  `dnsreader` (so `dnswriter`), with no policy rule needed (dnshelper's DESIGN.md, Delegated
+  access, phase 1). With dnshelper 0.7.0 the api-server refuses the task with 403. The broker
+  now reports an api-server 403 as `not_granted` instead of `api_server`, and the API answers 503
+  `not_granted`, saying that dnshelper may need updating. dnsapi's minimum dnshelper stays 0.7.0:
+  only this endpoint needs the newer one. The 403 is from the sources (2026-11-25): ns8-core's
+  api-server (`core/api-server/middleware/middleware.go`) has an `Authorizer` that returns false
+  for an action outside the caller's roles, and gin-jwt (v3) answers that with 403; its
+  `Unauthorized` handler keeps the code. Not yet seen on a node.
 
 ## ACME DNS-01 validation
 
@@ -391,7 +420,7 @@ manages. `configure-module` then publishes it itself, so that the Let's Encrypt 
   - One JSON request per connection, `{"target": "dnshelper" | "self", "action", "data"}`,
     answered with the task's `{"exit_code", "output", "error"}`, or `{"refused"}` or
     `{"unavailable"}`. It runs only an allowlist: on dnshelper, `list-zones`, `get-records`,
-    `list-owners`, `check-propagation`, and the four writes (`append-records`, `set-records`,
+    `list-owners`, `check-propagation`, `list-providers`, and the four writes (`append-records`, `set-records`,
     `delete-records`, `apply-changes`), which must carry `on_behalf_of`, so records written
     through the API never get dnsapi as their owner; on this module, `add-tenant`,
     `update-tenant`, `remove-tenant`, `assign-zone`, `unassign-zone`, `create-key` (never for the
@@ -799,7 +828,17 @@ wraps the task events in one promise, as theirs do):
    - Found on the node and fixed: the service's journal lines for key actions (`create-key`,
      `update-key`, `revoke-key`) had `key=` twice, the acting key and then the key acted on.
      The second is now `target_key=`, as it already was on the Activity page.
-10. Phase 2 (delegated zones), then phase 3 (PowerDNS hosting), as needed.
+10. The provider list (2026-11-25, see [Providers](#providers)): `GET /v1/providers`, and in
+    dnshelper `list-providers` in `dnsreader`.
+    - Unit tests: 81. The endpoint for an operator key and a restricted one, only the documented
+      keys passed on, the cache, 404 for tenant keys without calling dnshelper, 503
+      `not_granted`; the broker passing `list-providers`, still refusing `add-credential` and
+      `list-provider-zones`, and telling an api-server 403 apart from it being unreachable. The
+      robot suite: 404 for a tenant key, 503 `dnshelper_missing` for the operator key (CI has no
+      dnshelper).
+    - Not yet run on a node: against dnshelper 0.7.0 (503 `not_granted`) and the dnshelper
+      branch (the list).
+11. Phase 2 (delegated zones), then phase 3 (PowerDNS hosting), as needed.
 
 ## Further hardening (not built)
 

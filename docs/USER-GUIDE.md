@@ -392,6 +392,10 @@ zone_assigned`: another tenant has it.
 **`503 dnshelper_missing`**: dnshelper is not installed, or dnsapi has not found it yet. Install
 it; dnsapi notices within moments.
 
+**`503 not_granted`**: dnshelper does not let dnsapi run what the request needs, because it is
+an older version. `GET /v1/providers` needs a dnshelper newer than 0.7.0: update dnshelper in
+the Software center.
+
 **A zone gives `404 zone_not_found`**: the zone is not assigned to the key's tenant, dnshelper has
 no write rule for dnsapi on it, or the zone is not in dnshelper. Check the Tenants page. A tenant key gets 404 for any zone that is not its
 own, so that a key does not reveal which zones you manage.

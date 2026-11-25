@@ -39,6 +39,14 @@ RECORDS = {
         {"name": "www", "type": "A", "ttl": 300, "data": "192.0.2.1"},
     ],
 }
+PROVIDERS = [
+    {"name": "cloudflare", "label": "Cloudflare", "types": ["A", "TXT"], "notes": "A token with Zone:DNS:Edit",
+     "fields": [{"name": "api_token", "label": "API token", "secret": True, "required": True, "later": "x"}],
+     "future": "not documented"},
+    {"name": "rfc2136", "label": "RFC 2136", "types": ["A"],
+     "fields": [{"name": "server", "label": "Server", "secret": False, "required": True},
+                {"name": "key_alg", "label": "Algorithm", "secret": False, "required": False, "default": "hmac-sha256"}]},
+]
 OWNERS = {
     "acme.test": [{"name": "@", "type": "MX", "data": "10 mail.acme.test.", "callers": ["module/mail1"],
                    "removed": [], "time": "2026-11-21T00:00:00Z"}],
@@ -66,6 +74,8 @@ class FakeBackend:
         if agent_id == "dnshelper":
             if action == "list-zones":
                 return {"zones": ZONES}
+            if action == "list-providers":
+                return {"providers": PROVIDERS}
             if action == "get-records":
                 return {"records": [dict(r) for r in RECORDS.get(data["zone"], [])]}
             if action == "list-owners":
@@ -478,6 +488,37 @@ class ApiTest(unittest.TestCase):
         self.request("GET", "/v1/zones", "acme")
         self.request("GET", "/v1/zones", "beta")
         self.assertEqual(sum(1 for c in self.backend.calls if c[1] == "list-zones"), 1)
+
+    def test_providers(self):
+        resp, body = self.request("GET", "/v1/providers", "operator_ro")
+        self.assertEqual(resp.status, 200, body)
+        self.assertEqual([p["name"] for p in body["providers"]], ["cloudflare", "rfc2136"])
+        cloudflare = body["providers"][0]
+        # only the documented fields, whatever a later dnshelper adds
+        self.assertEqual(cloudflare, {"name": "cloudflare", "label": "Cloudflare", "notes": "A token with Zone:DNS:Edit",
+                                      "types": ["A", "TXT"],
+                                      "fields": [{"name": "api_token", "label": "API token", "secret": True, "required": True}]})
+        self.assertEqual(body["providers"][1]["fields"][1]["default"], "hmac-sha256")
+        # a key limited to ACME records may read it too: it says nothing about any zone
+        resp, body = self.request("GET", "/v1/providers", "op_acme")
+        self.assertEqual(resp.status, 200, body)
+        # cached
+        self.assertEqual(sum(1 for c in self.backend.calls if c[1] == "list-providers"), 1)
+        resp, body = self.request("POST", "/v1/providers", "operator", body={})
+        self.assertError(resp, body, 405, "method_not_allowed")
+
+    def test_providers_not_for_tenants(self):
+        for key in ("acme", "acme_host"):
+            resp, body = self.request("GET", "/v1/providers", key)
+            self.assertError(resp, body, 404, "not_found")
+        self.assertFalse([c for c in self.backend.calls if c[1] == "list-providers"])
+
+    def test_providers_from_an_older_dnshelper(self):
+        from dnsapi_server.backend import NotGranted
+        self.backend.fail_with = NotGranted("dnshelper/list-providers is not granted to this module")
+        resp, body = self.request("GET", "/v1/providers", "operator")
+        self.assertError(resp, body, 503, "not_granted")
+        self.assertIn("list-providers", body["error"]["message"])
 
     def test_records_with_owners(self):
         resp, body = self.request("GET", "/v1/zones/acme.test/records", "acme_ro")
@@ -1041,6 +1082,7 @@ class BrokerTest(unittest.TestCase):
     def test_allowlist(self):
         allowed = [
             ("dnshelper", "list-zones", {}),
+            ("dnshelper", "list-providers", {}),
             ("dnshelper", "get-records", {"zone": "x"}),
             ("dnshelper", "apply-changes", {"zone": "x", "on_behalf_of": "t1:k"}),
             ("self", "add-tenant", {"name": "x"}),
@@ -1053,6 +1095,8 @@ class BrokerTest(unittest.TestCase):
             ("dnshelper", "append-records", {"zone": "x"}),  # no on_behalf_of
             ("dnshelper", "set-policy", {"rules": []}),
             ("dnshelper", "add-zone", {}),
+            ("dnshelper", "add-credential", {}),
+            ("dnshelper", "list-provider-zones", {}),
             ("dnshelper", "has-zone", {"name": "x"}),
             ("self", "configure-module", {}),
             ("self", "create-key", {"owner": "operator"}),
@@ -1066,7 +1110,19 @@ class BrokerTest(unittest.TestCase):
                 self.client.run(target, action, data)
         self.assertEqual([c[1] for c in self.calls], [a[1] for a in allowed])
         self.assertEqual(self.calls[0][0], "module/dnshelper4")
-        self.assertEqual(self.calls[3][0], "module/dnsapi3")
+        self.assertEqual(self.calls[4][0], "module/dnsapi3")
+
+    def test_not_granted(self):
+        """The api-server's 403 (the role lacks the action) is told apart from it being down."""
+        from dnsapi_server import apiclient
+        from dnsapi_server.backend import NotGranted
+        for status, expected in ((403, NotGranted), (500, Unavailable)):
+            def run(agent_id, action, data, status=status):
+                raise apiclient.Unreachable(f"api-server answered {status}", status)
+            self.server.broker.client.run = run
+            with self.assertRaises(expected) as caught:
+                self.client.run("dnshelper", "list-providers", {})
+            self.assertEqual(isinstance(caught.exception, NotGranted), status == 403)
 
     def test_dnshelper_missing(self):
         self.dnshelper = None

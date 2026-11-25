@@ -895,10 +895,11 @@ only, concurrency limits, the IPv6 /64 throttle). The rest, kept here for later:
 6. **The audit trail to trust.** A compromised API service could rewrite
    `state/usage/activity.jsonl`, and so the Activity page. The journal lines and dnshelper's own
    audit log are out of its reach. The user guide says so (2026-11-22); nothing else is done.
-7. **Updates of the service image.** It pins `python:3.14.10-slim-trixie`; Renovate's
-   `dockerfile` manager reads `server/Containerfile` (dnshelper gets its Go image updates that
-   way), so a new Python image becomes a PR, but only once Renovate runs on this repository.
-   The Trivy scan in `publish-images.yml` runs only for stable releases and by hand.
+7. **Updates of the service image.** `server/Containerfile` pins an exact Python image
+   (`python:<version>-slim-trixie`). Renovate's `dockerfile` manager reads it and opens a PR for
+   each new image (the first, #18, moved from 3.14.10 to 3.15.1 on 2026-11-25); its CI runs the
+   unit tests inside the new image and the robot suite on it. The Trivy scan in
+   `publish-images.yml` runs only for stable releases and by hand.
 
 ## Open questions
 

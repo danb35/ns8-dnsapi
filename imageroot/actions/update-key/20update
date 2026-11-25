@@ -1,0 +1,37 @@
+#!/usr/bin/env python3
+
+#
+# Copyright (C) 2026 Dan Brown
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+
+# Change a key's label, allowed addresses or expiry. Its owner, scope and
+# record restriction are fixed (DESIGN.md, Concepts): a key that should reach
+# more is a new key. The secret is not changed either: a key that may have
+# leaked is revoked, not edited. A revoked key cannot be changed; an expired
+# one can be given a later expiry, which makes it work again.
+#
+# The API service calls this action through its selfadm role, for tenant keys
+# only.
+
+import json
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.environ["AGENT_INSTALL_DIR"], "pypkg"))
+from dnsapi import state
+
+request = json.load(sys.stdin)
+key_id = request["id"]
+changes = {k: request[k] for k in state.EDITABLE_KEY_FIELDS if k in request}
+with state.locked():
+    record = state.keys().get(key_id)
+    if record is not None and record["owner"] == "operator" and state.caller() == os.environ.get("AGENT_ID"):
+        state.fail("id", "not_permitted", key_id, "operator keys are changed by a cluster administrator")
+    error, changed = state.update_key(key_id, changes)
+    if error:
+        state.fail(*error)
+    record = state.keys()[key_id]
+if changed:
+    state.audit("update-key", key=key_id, owner=record["owner"], changes=changed)
+json.dump(state.key_view(key_id, record, state.last_used()), fp=sys.stdout)

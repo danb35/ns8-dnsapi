@@ -149,6 +149,12 @@ doc = {
                      "responses": {**ok("#/components/schemas/NewKey", "Created", "201"), **errors(400, 401, 403, 404, 429)}}},
         "/v1/tenants/{id}/keys/{key_id}": {
             "parameters": [TENANT_P, KEY_P],
+            "patch": {"summary": "Change a tenant key's label, allowed addresses or expiry",
+                      "description": "The fields left out keep their value. scope and restrict cannot be changed "
+                                     "(400 not_editable): revoke the key and make another. The secret does not change. "
+                                     "An expired key given a later expiry works again; a revoked key is 404.",
+                      "tags": ["tenants (operator)"], "requestBody": body("#/components/schemas/KeyUpdate"),
+                      "responses": {**ok("#/components/schemas/Key"), **errors(400, 401, 403, 404, 429)}},
             "delete": {"summary": "Revoke a tenant key", "tags": ["tenants (operator)"],
                        "responses": {"204": {"description": "Revoked"}, **errors(401, 403, 404, 429)}}},
     },
@@ -162,7 +168,7 @@ doc = {
         "schemas": {
             "Error": {"type": "object", "required": ["error"], "properties": {"error": {
                 "type": "object", "required": ["code", "message", "field"],
-                "properties": {"code": {"type": "string", "description": "invalid_request, invalid_json, missing_key, invalid_key, key_expired, key_revoked, insufficient_scope, tenant_disabled, address_not_allowed, restricted_key, outside_restriction, not_found, zone_not_found, tenant_not_found, key_not_found, stale, conflict, zone_assigned, zone_not_assignable, reserved_name, https_required, body_too_large, rate_limited, too_many_concurrent, busy, upstream_error, upstream_timeout, unavailable, dnshelper_missing, and dnshelper's own codes such as not_permitted and forbidden"},
+                "properties": {"code": {"type": "string", "description": "invalid_request, not_editable, invalid_json, missing_key, invalid_key, key_expired, key_revoked, insufficient_scope, tenant_disabled, address_not_allowed, restricted_key, outside_restriction, not_found, zone_not_found, tenant_not_found, key_not_found, stale, conflict, zone_assigned, zone_not_assignable, reserved_name, https_required, body_too_large, rate_limited, too_many_concurrent, busy, upstream_error, upstream_timeout, unavailable, dnshelper_missing, and dnshelper's own codes such as not_permitted and forbidden"},
                                "message": {"type": "string"}, "field": {"type": ["string", "null"]}}}}},
             "Status": {"type": "object", "properties": {"status": {"const": "ok"}}},
             "Record": {**record, "required": ["name", "type", "ttl", "data"],
@@ -235,6 +241,8 @@ doc = {
                 "expires": {"type": ["string", "null"], "format": "date-time"},
                 "restrict": {"type": ["object", "null"]},
                 "created": {"type": ["string", "null"], "format": "date-time"},
+                "modified": {"type": ["string", "null"], "format": "date-time",
+                             "description": "When the label, allowed addresses or expiry were last changed"},
                 "last_used": {"type": ["string", "null"], "format": "date-time"},
                 "status": {"enum": ["active", "expired", "revoked"]},
                 "revoked": {"type": ["string", "null"], "format": "date-time"},
@@ -246,6 +254,10 @@ doc = {
                 "allowlist": {"type": "array", "items": {"type": "string"}, "description": "IP addresses or CIDR networks"},
                 "expires": {"type": ["string", "null"], "format": "date-time"},
                 "restrict": {"$ref": "#/components/schemas/Restrict"}}},
+            "KeyUpdate": {"type": "object", "minProperties": 1, "additionalProperties": False, "properties": {
+                "label": {"type": "string", "maxLength": 100},
+                "allowlist": {"type": "array", "items": {"type": "string"}, "description": "IP addresses or CIDR networks; empty for any"},
+                "expires": {"type": ["string", "null"], "format": "date-time", "description": "In the future; null for never"}}},
             "NewKey": {"allOf": [{"$ref": "#/components/schemas/Key"},
                                  {"type": "object", "required": ["key"], "properties": {"key": {"type": "string"}}}]},
         },

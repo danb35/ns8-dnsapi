@@ -27,6 +27,8 @@ log = logging.getLogger("dnsapi")
 
 TENANT_ID_RE = re.compile(r"^t[0-9a-f]{8}$")
 KEY_ID_RE = re.compile(r"^[0-9a-f]{8}$")
+# What PATCH may change on a key; the update-key action checks the values.
+EDITABLE_KEY_FIELDS = ("label", "allowlist", "expires")
 # A zone name as dnshelper accepts it (lowercase, at least one dot).
 ZONE_RE = re.compile(r"^(?=.{3,253}$)([a-z0-9_]([a-z0-9_-]{0,61}[a-z0-9_])?\.)+[a-z0-9-]{2,63}$")
 RECORD_TYPE_RE = re.compile(r"^[A-Za-z0-9]{1,10}$")
@@ -724,6 +726,7 @@ class Api:
             "expires": record.get("expires"),
             "restrict": record.get("restrict"),
             "created": record.get("created"),
+            "modified": record.get("modified"),
             "last_used": self.store.last_used.get(key_id),
             "status": key_status(record, self.store.clock()),
             "revoked": record.get("revoked"),
@@ -819,20 +822,48 @@ class Api:
         view = self.key_view(key_id, record) if record else {"id": key_id}
         return HTTPStatus.CREATED, {**view, "key": key}
 
-    def revoke_tenant_key(self, req):
-        self.require_operator(req)
-        self.require_write(req)
-        tenant_id = self.tenant_param(req)
+    def tenant_key_param(self, req, tenant_id):
         key_id = req.params["key"]
         record = self.store.keys().get(key_id) if KEY_ID_RE.match(key_id) else None
         if record is None or record["owner"] != tenant_id or record.get("revoked"):
             raise ApiError(HTTPStatus.NOT_FOUND, "key_not_found", "No such key")
+        return key_id, record
+
+    def update_tenant_key(self, req):
+        """Change a key's label, allowed addresses or expiry (DESIGN.md, Concepts).
+        What the key can reach (scope, restrict) is fixed: that is a new key."""
+        self.require_operator(req)
+        self.require_write(req)
+        tenant_id = self.tenant_param(req)
+        key_id, before = self.tenant_key_param(req, tenant_id)
+        body = self.body_object(req)
+        for name in body:
+            if name not in EDITABLE_KEY_FIELDS:
+                raise ApiError(HTTPStatus.BAD_REQUEST, "not_editable",
+                               f"{name} cannot be changed: revoke the key and make another", field=name)
+        if not body:
+            raise ApiError(HTTPStatus.BAD_REQUEST, "invalid_request",
+                           f"Nothing to change: give {', '.join(EDITABLE_KEY_FIELDS)}")
+        self.own_action("update-key", {"id": key_id, **body})
+        after = self.store.keys().get(key_id) or before
+        changes = {n: [before.get(n), after.get(n)] for n in EDITABLE_KEY_FIELDS
+                   if before.get(n) != after.get(n)}
+        if changes:
+            self.audit(req, "update-key", tenant=tenant_id, key=key_id, changes=changes)
+        return HTTPStatus.OK, self.key_view(key_id, after)
+
+    def revoke_tenant_key(self, req):
+        self.require_operator(req)
+        self.require_write(req)
+        tenant_id = self.tenant_param(req)
+        key_id, _ = self.tenant_key_param(req, tenant_id)
         self.own_action("revoke-key", {"id": key_id})
         self.audit(req, "revoke-key", tenant=tenant_id, key=key_id)
         return HTTPStatus.NO_CONTENT, None
 
     def audit(self, req, action, **fields):
-        details = " ".join(f'{k}="{v}"' for k, v in fields.items())
+        details = " ".join(f'{k}="{v}"' if isinstance(v, str) else f"{k}={json.dumps(v)}"
+                           for k, v in fields.items())
         log.info('dnsapi audit: key="%s" owner="%s" address="%s" action="%s" %s result="ok"',
                  req.principal.key_id, req.principal.owner, req.client_ip, action, details)
         # "key" is who acted; a key the operator made or revoked is "target_key"
@@ -859,7 +890,7 @@ ROUTES = [
     (rf"/v1/tenants/{TENANT}", {"GET": "get_tenant", "PATCH": "update_tenant", "DELETE": "remove_tenant"}),
     (rf"/v1/tenants/{TENANT}/zones/{ZONE}", {"PUT": "assign_zone", "DELETE": "unassign_zone"}),
     (rf"/v1/tenants/{TENANT}/keys", {"GET": "list_tenant_keys", "POST": "create_tenant_key"}),
-    (rf"/v1/tenants/{TENANT}/keys/(?P<key>[^/]+)", {"DELETE": "revoke_tenant_key"}),
+    (rf"/v1/tenants/{TENANT}/keys/(?P<key>[^/]+)", {"PATCH": "update_tenant_key", "DELETE": "revoke_tenant_key"}),
 ]
 COMPILED = [(re.compile("^" + pattern + "$"), methods) for pattern, methods in ROUTES]
 

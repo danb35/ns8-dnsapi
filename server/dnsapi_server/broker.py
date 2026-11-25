@@ -33,7 +33,7 @@ MAX_TASKS = 16
 DNSHELPER_READ = {"list-zones", "get-records", "list-owners", "check-propagation"}
 DNSHELPER_WRITE = {"append-records", "set-records", "delete-records", "apply-changes"}
 SELF_ACTIONS = {"add-tenant", "update-tenant", "remove-tenant", "assign-zone", "unassign-zone",
-                "create-key", "revoke-key", "revoke-exposed-key"}
+                "create-key", "update-key", "revoke-key", "revoke-exposed-key"}
 
 
 def check(target, action, data):

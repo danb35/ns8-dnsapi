@@ -215,6 +215,33 @@ Check that a key sent over plain HTTP is revoked
     ${output} =    Execute Command    api-cli run module/${module_id}/list-activity
     Should Contain    ${output}    revoke-exposed-key
 
+Check that a key's allowed addresses and label can be changed
+    ${status}    ${body} =    Call API    PATCH    /v1/tenants/${TENANT_ID}/keys/${TENANT_KEY_ID}    ${OPERATOR_KEY}    {"allowlist": ["192.0.2.0/24"], "label": "ci tenant, fenced"}
+    Should Be Equal As Integers    ${status}    200
+    Should Be Equal    ${body}[label]    ci tenant, fenced
+    Should Not Be Equal    ${body}[modified]    ${None}
+    ${status}    ${body} =    Call API    GET    /v1/zones    ${TENANT_KEY}
+    Should Be Equal As Integers    ${status}    403
+    Should Be Equal    ${body}[error][code]    address_not_allowed
+    ${status}    ${body} =    Call API    PATCH    /v1/tenants/${TENANT_ID}/keys/${TENANT_KEY_ID}    ${OPERATOR_KEY}    {"allowlist": []}
+    Should Be Equal As Integers    ${status}    200
+    ${status}    ${body} =    Call API    GET    /v1/zones    ${TENANT_KEY}
+    Should Be Equal As Integers    ${status}    503
+    # what a key can reach is fixed
+    ${status}    ${body} =    Call API    PATCH    /v1/tenants/${TENANT_ID}/keys/${TENANT_KEY_ID}    ${OPERATOR_KEY}    {"scope": "write"}
+    Should Be Equal As Integers    ${status}    400
+    Should Be Equal    ${body}[error][code]    not_editable
+    ${output} =    Execute Command    api-cli run module/${module_id}/list-activity
+    Should Contain    ${output}    update-key
+    # an operator key, by the administrator
+    ${id} =    Evaluate    $OPERATOR_KEY.split('_')[1]
+    ${output}    ${rc} =    Execute Command    api-cli run module/${module_id}/update-key --data '{"id": "${id}", "label": "ci operator"}'
+    ...    return_rc=True
+    Should Be Equal As Integers    ${rc}    0
+    ${key} =    Evaluate    json.loads($output)    modules=json
+    Should Be Equal    ${key}[label]    ci operator
+    Should Be Equal    ${key}[scope]    write
+
 Check that a revoked key stops working
     ${status}    ${body} =    Call API    DELETE    /v1/tenants/${TENANT_ID}/keys/${TENANT_KEY_ID}    ${OPERATOR_KEY}
     Should Be Equal As Integers    ${status}    204

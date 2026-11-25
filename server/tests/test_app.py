@@ -121,6 +121,12 @@ class FakeBackend:
                                             "created": "2026-11-21T00:00:00Z"}
                 write_json(state, "keys.json", keys)
                 return {}
+            if action == "update-key":
+                record = keys["keys"][data["id"]]
+                record.update({k: data[k] for k in ("label", "allowlist", "expires") if k in data},
+                              modified="2026-11-25T00:00:00Z")
+                write_json(state, "keys.json", keys)
+                return {}
             if action in ("revoke-key", "revoke-exposed-key"):
                 keys["keys"][data["id"]].update(
                     revoked="2026-11-21T00:00:00Z",
@@ -884,6 +890,48 @@ class ApiTest(unittest.TestCase):
         resp, again = self.request("DELETE", f"/v1/tenants/t00000002/keys/{body['id']}", "operator")
         self.assertError(resp, again, 404, "key_not_found")
 
+    def test_update_tenant_key(self):
+        key_id = self.key_id("beta")
+        path = f"/v1/tenants/t00000002/keys/{key_id}"
+        resp, body = self.request("PATCH", path, "operator",
+                                  body={"label": "new label", "allowlist": ["192.0.2.0/24"]})
+        self.assertEqual(resp.status, 200, body)
+        self.assertEqual((body["label"], body["allowlist"], body["scope"]), ("new label", ["192.0.2.0/24"], "write"))
+        self.assertEqual(body["modified"], "2026-11-25T00:00:00Z")
+        self.assertEqual(self.backend.calls[-1][1:],
+                         ("update-key", {"id": key_id, "label": "new label", "allowlist": ["192.0.2.0/24"]}))
+        entry = self.activity()[-1]
+        self.assertEqual((entry["action"], entry["target_key"], entry["tenant"]), ("update-key", key_id, "t00000002"))
+        self.assertEqual(entry["changes"]["allowlist"], [[], ["192.0.2.0/24"]])
+        # the new allowlist applies at once (the test client is 127.0.0.1)
+        resp, again = self.request("GET", "/v1/zones", "beta")
+        self.assertError(resp, again, 403, "address_not_allowed")
+
+    def test_update_tenant_key_refuses_fixed_fields(self):
+        path = f"/v1/tenants/t00000002/keys/{self.key_id('beta')}"
+        for name, value in (("scope", "read"), ("restrict", "acme"), ("owner", "t00000001"), ("hash", "0" * 64)):
+            resp, body = self.request("PATCH", path, "operator", body={"label": "x", name: value})
+            self.assertError(resp, body, 400, "not_editable")
+            self.assertEqual(body["error"]["field"], name)
+        resp, body = self.request("PATCH", path, "operator", body={})
+        self.assertError(resp, body, 400, "invalid_request")
+        self.assertNotIn("update-key", [c[1] for c in self.backend.calls])
+
+    def test_update_tenant_key_reach(self):
+        body = {"label": "x"}
+        # another tenant's key, an unknown or revoked one: 404
+        resp, out = self.request("PATCH", f"/v1/tenants/t00000001/keys/{self.key_id('beta')}", "operator", body=body)
+        self.assertError(resp, out, 404, "key_not_found")
+        resp, out = self.request("PATCH", "/v1/tenants/t00000002/keys/abcdef12", "operator", body=body)
+        self.assertError(resp, out, 404, "key_not_found")
+        self.backend.run("self", "revoke-key", {"id": self.key_id("beta")})
+        resp, out = self.request("PATCH", f"/v1/tenants/t00000002/keys/{self.key_id('beta')}", "operator", body=body)
+        self.assertError(resp, out, 404, "key_not_found")
+        # a tenant key cannot reach the operator endpoints
+        resp, out = self.request("PATCH", f"/v1/tenants/t00000001/keys/{self.key_id('acme')}", "acme", body=body)
+        self.assertEqual(resp.status, 404, out)
+        self.assertNotIn("update-key", [c[1] for c in self.backend.calls])
+
     def test_revoked_key_over_plain_http_is_not_revoked_again(self):
         self.backend.run("self", "revoke-key", {"id": self.key_id("acme")})
         resp, body = self.request("GET", "/v1/zones", "acme", headers={"X-Forwarded-Proto": "http"})
@@ -990,6 +1038,7 @@ class BrokerTest(unittest.TestCase):
             ("dnshelper", "apply-changes", {"zone": "x", "on_behalf_of": "t1:k"}),
             ("self", "add-tenant", {"name": "x"}),
             ("self", "create-key", {"owner": "t00000001"}),
+            ("self", "update-key", {"id": "abcdef12", "label": "x"}),
             ("self", "revoke-key", {"id": "abcdef12"}),
             ("self", "revoke-exposed-key", {"id": "abcdef12", "address": "192.0.2.1"}),
         ]

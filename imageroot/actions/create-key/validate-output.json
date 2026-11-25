@@ -78,6 +78,13 @@
                     }
                 }
             }
+        },
+        "modified": {
+            "type": [
+                "string",
+                "null"
+            ],
+            "description": "When the label, allowed addresses or expiry were last changed"
         }
     }
 }

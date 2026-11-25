@@ -11,6 +11,7 @@
 #
 #   request  {"target": "dnshelper" | "self", "action", "data"}   one JSON line
 #   answer   {"exit_code", "output", "error"}  or  {"refused": why}  or  {"unavailable": why}
+#            (why: dnshelper_missing, not_granted, timeout, api_server, broker_error)
 #
 # A compromised service can then do what its API allows, and nothing else:
 # no Traefik route, no other action of this module, no other module.
@@ -30,7 +31,7 @@ log = logging.getLogger("dnsapi-broker")
 MAX_REQUEST = 2 * 1024 * 1024
 MAX_TASKS = 16
 
-DNSHELPER_READ = {"list-zones", "get-records", "list-owners", "check-propagation"}
+DNSHELPER_READ = {"list-zones", "get-records", "list-owners", "check-propagation", "list-providers"}
 DNSHELPER_WRITE = {"append-records", "set-records", "delete-records", "apply-changes"}
 SELF_ACTIONS = {"add-tenant", "update-tenant", "remove-tenant", "assign-zone", "unassign-zone",
                 "create-key", "update-key", "revoke-key", "revoke-exposed-key"}
@@ -88,6 +89,10 @@ class Broker:
                 return {"unavailable": "timeout"}
             except apiclient.Unreachable as exc:
                 log.error("%s", exc)
+                if exc.status == 403:
+                    # The api-server refused the action itself: this module's role on
+                    # that dnshelper does not include it (an older dnshelper).
+                    return {"unavailable": "not_granted"}
                 return {"unavailable": "api_server"}
 
 

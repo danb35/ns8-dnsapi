@@ -43,6 +43,10 @@ class DnshelperMissing(Unavailable):
     """No dnshelper is installed."""
 
 
+class NotGranted(Unavailable):
+    """The api-server refused the action: this module's role does not include it."""
+
+
 class Backend:
     def __init__(self, socket_path="/run/broker/broker.sock", timeout=170.0):
         self.socket_path = socket_path
@@ -68,7 +72,7 @@ class Backend:
 
     def run(self, target, action, data):
         """Run a task on "dnshelper" or "self" (this module) and return its output;
-        raise TaskRefused, TaskFailed, TaskTimeout, DnshelperMissing or Unavailable."""
+        raise TaskRefused, TaskFailed, TaskTimeout, DnshelperMissing, NotGranted or Unavailable."""
         answer = self._ask({"target": target, "action": action, "data": data})
         if "refused" in answer:
             # The service asked for something the broker does not run: a bug here.
@@ -78,6 +82,8 @@ class Backend:
             reason = answer["unavailable"]
             if reason == "dnshelper_missing":
                 raise DnshelperMissing("dnshelper is not installed")
+            if reason == "not_granted":
+                raise NotGranted(f"{target}/{action} is not granted to this module")
             if reason == "timeout":
                 raise TaskTimeout(f"{target}/{action} did not end in time")
             raise Unavailable(f"{target}/{action}: {reason}")

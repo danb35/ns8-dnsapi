@@ -166,6 +166,13 @@ Check that the zones endpoint reports dnshelper missing
     Should Be Equal As Integers    ${status}    503
     Should Be Equal    ${body}[error][code]    dnshelper_missing
 
+Check that the providers endpoint is for operator keys
+    ${status}    ${body} =    Call API    GET    /v1/providers    ${TENANT_KEY}
+    Should Be Equal As Integers    ${status}    404
+    ${status}    ${body} =    Call API    GET    /v1/providers    ${OPERATOR_KEY}
+    Should Be Equal As Integers    ${status}    503
+    Should Be Equal    ${body}[error][code]    dnshelper_missing
+
 Check that a read key cannot change records
     ${status}    ${body} =    Call API    POST    /v1/zones/example.test/records    ${TENANT_KEY}    {"records": [{"name": "www", "type": "A", "data": "192.0.2.1"}]}
     Should Be Equal As Integers    ${status}    403

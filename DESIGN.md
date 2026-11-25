@@ -13,7 +13,7 @@ or on a node.
 Status: build order steps 1 to 8 are done (the service and its route; tenants, keys,
 authentication, rate limits and the read endpoints; the write endpoints; ACME DNS-01; the admin
 UI and the OpenAPI document; the full node test; the API host name in DNS; the hardening from the
-security review); step 9 (editable keys) is built, not yet tested on a node. dnshelper's side, phase 1, is released in dnshelper 0.7.0 (2026-11-21), which this
+security review); step 9 (editable keys) is done. dnshelper's side, phase 1, is released in dnshelper 0.7.0 (2026-11-21), which this
 module needs at least.
 
 Origin: forum request, community.nethserver.org topic 28774, posts 32-37 (2026-11-18/20). The
@@ -780,7 +780,22 @@ wraps the task events in one promise, as theirs do):
      a later expiry and new addresses brought it back to the active keys, with "Changed".
    - The robot suite: through Traefik, a tenant key's allowlist and label changed (the key then
      refused from the node with 403 `address_not_allowed`, then accepted again), `scope` refused,
-     and an operator key's label changed with `api-cli`. Not yet run on the test node.
+     and an operator key's label changed with `api-cli`.
+   - Tested on the test node (2026-11-25, `dnsapi4` on node 3, Rocky 9, ns8-traefik 4.2.5), after
+     `update-module` from an earlier branch image: `update-key` appeared in `selfadm`. With a
+     temporary operator key, tenant and read key, through Traefik: the allowlist changed to
+     `192.0.2.0/24` refused the key (403 `address_not_allowed`) on the next request, and changed
+     back accepted it; an expiry 40 s ahead, then 401 `key_expired` once it passed, then a later
+     expiry and the key worked again; a past expiry 400 `invalid_expiry`, a bad address 400
+     `bad_ip_address`, `scope` and `restrict` 400 `not_editable`, an empty body 400; the tenant
+     key on the endpoint, the operator key's id and another tenant's key all 404. From inside
+     the API container, the broker ran `update-key` for the tenant key and the action refused
+     the operator key (`not_permitted`); `api-cli` changed the operator key's label and
+     allowlist. A revoked key: 404 through the API, `key_revoked` from the action. Each change
+     gave the action's and the service's audit lines and an Activity entry with the old and new
+     values. Removed afterwards: the tenant with its key; the operator key is revoked, and
+     listed as such. Not tested on the node: the Edit dialog (the browser pane refuses the
+     node's certificate; checked in the `ui/dev` harness).
 10. Phase 2 (delegated zones), then phase 3 (PowerDNS hosting), as needed.
 
 ## Further hardening (not built)

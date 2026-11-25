@@ -76,6 +76,11 @@ Tenant has zones
     ${want} =    Evaluate    sorted($zones)
     Should Be Equal    ${have}    ${want}
 
+dnsapi reports dnshelper missing
+    ${output} =    Execute Command    api-cli run module/${module_id}/get-overview
+    ${overview} =    Evaluate    json.loads($output)    modules=json
+    Should Be Equal    ${overview}[dnshelper_error]    dnshelper_missing
+
 dnsapi has found dnshelper
     ${status}    ${body} =    Call API    GET    /v1/providers    ${OPERATOR_KEY}
     Should Be Equal As Integers    ${status}    200    ${body}
@@ -582,7 +587,9 @@ Check that dnsapi notices dnshelper removed
     ${rc} =    Execute Command    remove-module --no-preserve ${dnshelper_id}
     ...    return_rc=True  return_stdout=False
     Should Be Equal As Integers    ${rc}  0
-    Wait Until Keyword Succeeds    60s    3s    Expect API    503    GET    /v1/providers    ${OPERATOR_KEY}    code=dnshelper_missing
+    Wait Until Keyword Succeeds    60s    3s    dnsapi reports dnshelper missing
+    # the zone list is cached for 30 s (the provider list for 10 minutes, so it is not checked)
+    Wait Until Keyword Succeeds    90s    5s    Expect API    503    GET    /v1/zones    ${OPERATOR_KEY}    code=dnshelper_missing
     Execute Command    podman rm -f dnsapi-ci-pdns
 
 Check if dnsapi is removed correctly

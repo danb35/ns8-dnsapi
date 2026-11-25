@@ -51,7 +51,8 @@ visibility and set it to public if needed. `publish-images.yml` skips the very f
 How the tests run: `test-module.yml` starts after "Publish images" succeeds (`workflow_run`), boots
 throwaway NS8 nodes (Rocky 9 and Debian 13) and runs `tests/*.robot` against the image just
 published as `ghcr.io/danb35/dnsapi:<branch>`. Robot tests must use fake credentials only; nothing
-in CI may talk to a real service. It has failed for reasons unrelated to the code (SSH refused
+in CI may talk to a real service. Partway through, the suite installs a pinned dnshelper
+(`DNSHELPER_IMAGE`) with a throwaway PowerDNS on the node's loopback as its DNS host. It has failed for reasons unrelated to the code (SSH refused
 right after the VM starts; NS8's cluster setup failing to pull its `metrics` module): re-run before
 suspecting the module, and read the failing step with `gh run view --job <id> --log`.
 

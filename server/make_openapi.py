@@ -103,6 +103,11 @@ doc = {
                     "parameters": [{"name": "name", "in": "query", "required": True, "schema": {"type": "string"}},
                                    {"name": "type", "in": "query", "required": True, "schema": {"type": "string"}}],
                     "responses": {**ok("#/components/schemas/Propagation"), **ZONE_ERRORS}}},
+        "/v1/providers": {"get": {
+            "summary": "The DNS hosts dnshelper supports",
+            "description": "Operator keys only (a tenant key gets 404). dnshelper's built-in list: each DNS host with the credential fields it takes and the record types it supports. It describes what dnshelper can work with, not the administrator's credentials or zones. Cached for 10 minutes. Needs a dnshelper newer than 0.7.0; with an older one the answer is 503 not_granted.",
+            "tags": ["providers (operator)"],
+            "responses": {**ok("#/components/schemas/ProviderList"), **errors(401, 403, 404, 429, 502, 503, 504)}}},
         "/v1/acme/present": {"post": {
             "summary": "Add an ACME DNS-01 challenge",
             "description": "The protocol of lego's httpreq provider and acme.sh's acmeproxy. HTTP Basic authentication with the key as the password is accepted here. fqdn must start with _acme-challenge.; the zone is the longest of the key's zones containing it. The TXT value is added with TTL 60, beside any other.",
@@ -149,6 +154,12 @@ doc = {
                      "responses": {**ok("#/components/schemas/NewKey", "Created", "201"), **errors(400, 401, 403, 404, 429)}}},
         "/v1/tenants/{id}/keys/{key_id}": {
             "parameters": [TENANT_P, KEY_P],
+            "patch": {"summary": "Change a tenant key's label, allowed addresses or expiry",
+                      "description": "The fields left out keep their value. scope and restrict cannot be changed "
+                                     "(400 not_editable): revoke the key and make another. The secret does not change. "
+                                     "An expired key given a later expiry works again; a revoked key is 404.",
+                      "tags": ["tenants (operator)"], "requestBody": body("#/components/schemas/KeyUpdate"),
+                      "responses": {**ok("#/components/schemas/Key"), **errors(400, 401, 403, 404, 429)}},
             "delete": {"summary": "Revoke a tenant key", "tags": ["tenants (operator)"],
                        "responses": {"204": {"description": "Revoked"}, **errors(401, 403, 404, 429)}}},
     },
@@ -162,7 +173,7 @@ doc = {
         "schemas": {
             "Error": {"type": "object", "required": ["error"], "properties": {"error": {
                 "type": "object", "required": ["code", "message", "field"],
-                "properties": {"code": {"type": "string", "description": "invalid_request, invalid_json, missing_key, invalid_key, key_expired, key_revoked, insufficient_scope, tenant_disabled, address_not_allowed, restricted_key, outside_restriction, not_found, zone_not_found, tenant_not_found, key_not_found, stale, conflict, zone_assigned, zone_not_assignable, reserved_name, https_required, body_too_large, rate_limited, too_many_concurrent, busy, upstream_error, upstream_timeout, unavailable, dnshelper_missing, and dnshelper's own codes such as not_permitted and forbidden"},
+                "properties": {"code": {"type": "string", "description": "invalid_request, not_editable, invalid_json, missing_key, invalid_key, key_expired, key_revoked, insufficient_scope, tenant_disabled, address_not_allowed, restricted_key, outside_restriction, not_found, zone_not_found, tenant_not_found, key_not_found, stale, conflict, zone_assigned, zone_not_assignable, reserved_name, https_required, body_too_large, rate_limited, too_many_concurrent, busy, upstream_error, upstream_timeout, unavailable, dnshelper_missing, not_granted, and dnshelper's own codes such as not_permitted and forbidden"},
                                "message": {"type": "string"}, "field": {"type": ["string", "null"]}}}}},
             "Status": {"type": "object", "properties": {"status": {"const": "ok"}}},
             "Record": {**record, "required": ["name", "type", "ttl", "data"],
@@ -175,6 +186,19 @@ doc = {
                      "properties": {"zone": {"type": "string"}, "provider": {"type": ["string", "null"]},
                                     "full": {"type": "boolean", "description": "false: dnshelper lets dnsapi change only some records, such as ACME challenges"},
                                     "tenant": {"type": ["string", "null"], "description": "Operator keys only"}}},
+            "ProviderField": {"type": "object", "required": ["name", "label", "secret", "required"],
+                              "properties": {"name": {"type": "string", "description": "The key in the credential's fields", "examples": ["api_token"]},
+                                             "label": {"type": "string"},
+                                             "secret": {"type": "boolean", "description": "A password or token: never shown again once saved"},
+                                             "required": {"type": "boolean"},
+                                             "default": {"type": "string"}}},
+            "Provider": {"type": "object", "required": ["name", "label", "fields", "types"],
+                         "properties": {"name": {"type": "string", "description": "As in Zone.provider", "examples": ["cloudflare"]},
+                                        "label": {"type": "string", "examples": ["Cloudflare"]},
+                                        "notes": {"type": "string", "description": "What the credential needs, for the person who makes it"},
+                                        "types": {"type": "array", "items": {"type": "string"}, "description": "Record types the DNS host supports"},
+                                        "fields": {"type": "array", "items": {"$ref": "#/components/schemas/ProviderField"}}}},
+            "ProviderList": {"type": "object", "properties": {"providers": {"type": "array", "items": {"$ref": "#/components/schemas/Provider"}}}},
             "ZoneList": {"type": "object", "properties": {"zones": {"type": "array", "items": {"$ref": "#/components/schemas/Zone"}}}},
             "RecordList": {"type": "object", "properties": {"zone": {"type": "string"},
                                                            "records": {"type": "array", "items": {"$ref": "#/components/schemas/Record"}}}},
@@ -235,6 +259,8 @@ doc = {
                 "expires": {"type": ["string", "null"], "format": "date-time"},
                 "restrict": {"type": ["object", "null"]},
                 "created": {"type": ["string", "null"], "format": "date-time"},
+                "modified": {"type": ["string", "null"], "format": "date-time",
+                             "description": "When the label, allowed addresses or expiry were last changed"},
                 "last_used": {"type": ["string", "null"], "format": "date-time"},
                 "status": {"enum": ["active", "expired", "revoked"]},
                 "revoked": {"type": ["string", "null"], "format": "date-time"},
@@ -246,6 +272,10 @@ doc = {
                 "allowlist": {"type": "array", "items": {"type": "string"}, "description": "IP addresses or CIDR networks"},
                 "expires": {"type": ["string", "null"], "format": "date-time"},
                 "restrict": {"$ref": "#/components/schemas/Restrict"}}},
+            "KeyUpdate": {"type": "object", "minProperties": 1, "additionalProperties": False, "properties": {
+                "label": {"type": "string", "maxLength": 100},
+                "allowlist": {"type": "array", "items": {"type": "string"}, "description": "IP addresses or CIDR networks; empty for any"},
+                "expires": {"type": ["string", "null"], "format": "date-time", "description": "In the future; null for never"}}},
             "NewKey": {"allOf": [{"$ref": "#/components/schemas/Key"},
                                  {"type": "object", "required": ["key"], "properties": {"key": {"type": "string"}}}]},
         },

@@ -13,7 +13,7 @@ or on a node.
 Status: build order steps 1 to 8 are done (the service and its route; tenants, keys,
 authentication, rate limits and the read endpoints; the write endpoints; ACME DNS-01; the admin
 UI and the OpenAPI document; the full node test; the API host name in DNS; the hardening from the
-security review). dnshelper's side, phase 1, is released in dnshelper 0.7.0 (2026-11-21), which this
+security review); step 9 (editable keys) is done; step 10 (the provider list) is done. dnshelper's side, phase 1, is released in dnshelper 0.7.0 (2026-11-21), which this
 module needs at least.
 
 Origin: forum request, community.nethserver.org topic 28774, posts 32-37 (2026-11-18/20). The
@@ -78,6 +78,26 @@ means:
     revoked keys out unless `?revoked=true`, so existing portals see no change. The tenant and
     Status page counts are of active keys only. `remove-tenant` still deletes its keys: they
     would have no owner to list them under. Kept without limit: a record is a few hundred bytes.
+  - A key's label, allowlist and expiry can be changed (decision 2026-11-25, from the operator;
+    the earlier position was that nothing could be). Its owner, scope and `restrict` stay fixed:
+    they decide what the key can reach, and a key handed to a less-trusted host (an ACME client
+    on an internal box, a customer's script) must not gain reach after it was given out. A key
+    that should reach more is a new key. The secret does not change either, so a key that may
+    have leaked is still revoked, not edited.
+    - `update-key` (`id`, and any of `label`, `allowlist`, `expires`; a field left out keeps its
+      value) records `modified` (the time) on the key and an audit line and Activity entry with
+      each changed field's old and new value. A revoked key cannot be changed (`key_revoked`);
+      revocation stays final.
+    - An expired key given a later expiry works again: it is the same as making a new key with
+      the same settings, without redeploying it. The new expiry must be in the future, as at
+      creation.
+    - Through the API: `PATCH /v1/tenants/{id}/keys/{key id}` for tenant keys; any other field
+      is 400 `not_editable`, and a revoked key is 404 as for `DELETE`. Like `create-key` and
+      `revoke-key`, the action refuses operator keys when the module itself calls it, so the
+      service cannot change an operator key's allowlist or expiry. For tenant keys it gives a
+      compromised service nothing new: it can already make tenant keys with any settings.
+    - Changes apply on the next request: the service reloads `keys.json` when it changes. Rate
+      and concurrency counts are kept by key id, so they carry over.
 - **Key format:** `dnsapi_<id>_<secret>`. The id (8 hex) finds the record. The secret (32 random
   bytes, base32) is stored only as its SHA-256 hash, which is enough for a random secret of that
   length. The full key is shown once, at creation; there is no way to read it back. The prefix
@@ -104,9 +124,10 @@ and SOA read-only.
 | `PUT /v1/zones/{zone}/rrsets` `{records, dry_run}` | write | `set-records` mode `rrset` |
 | `DELETE /v1/zones/{zone}/records` `{records, dry_run}` | write | `delete-records` |
 | `GET /v1/zones/{zone}/propagation?name=&type=` | any | `check-propagation` (in dnshelper's `dnsreader` role since 0.7.0) |
+| `GET /v1/providers` | operator | `list-providers` (in dnshelper's `dnsreader` role after 0.7.0; see [Providers](#providers)) |
 | `GET/POST/PATCH/DELETE /v1/tenants[/{id}]` | operator | none (dnsapi's own state) |
 | `PUT/DELETE /v1/tenants/{id}/zones/{zone}` | operator | `list-zones` checks that dnsapi may write in it (`access: "write"`; `full` or not) |
-| `POST/DELETE /v1/tenants/{id}/keys[/{key id}]` | operator | none |
+| `POST/PATCH/DELETE /v1/tenants/{id}/keys[/{key id}]` | operator | none (`PATCH` changes only `label`, `allowlist`, `expires`) |
 | `POST /v1/acme/present`, `POST /v1/acme/cleanup` `{fqdn, value}` | write | `append-records`, `delete-records` of one `_acme-challenge` TXT record (see [ACME DNS-01 validation](#acme-dns-01-validation)) |
 | `GET /v1/status` | none | none (liveness only, says nothing about zones) |
 
@@ -115,6 +136,34 @@ find out which zones are managed.
 
 Phase 2 adds `POST /v1/zones` (add a domain with a provider and credentials) and `DELETE
 /v1/zones/{zone}`, using dnshelper's delegated-zone actions.
+
+## Providers
+
+Request (2026-11-25, forum topic 29504, post 7, the operator): the portal should be able to list
+the DNS hosts it can offer from dnsapi itself, so that a host added to dnshelper appears without
+anyone keeping a list by hand. It is the first piece of phase 2 (adding domains and their
+credentials through the API), which the same post asks for; only the list is built.
+
+- `GET /v1/providers` returns dnshelper's `list-providers`: each DNS host's `name` (as in a
+  zone's `provider`), `label`, `notes`, the record `types` it supports, and the credential
+  `fields` it takes (`name`, `label`, `secret`, `required`, `default`). dnsapi passes on only
+  those keys, so what a later dnshelper adds is not exposed until it is documented here.
+- Operator keys only, restricted ones included: the list is dnshelper's built-in registry, the
+  same for every caller, and says nothing about the administrator's credentials or zones. A tenant
+  key gets 404, as for the other operator endpoints. Configured credentials are not listed: they
+  are the administrator's, and phase 2 lets a delegate use only the ones it made.
+- Cached for 10 minutes (the list changes only when dnshelper is updated); a miss counts once
+  against the key's rate limit.
+- dnshelper needed a change: `list-providers` was admin only until 0.7.0, and is now in
+  `dnsreader` (so `dnswriter`), with no policy rule needed (dnshelper's DESIGN.md, Delegated
+  access, phase 1). With dnshelper 0.7.0 the api-server refuses the task with 403. The broker
+  now reports an api-server 403 as `not_granted` instead of `api_server`, and the API answers 503
+  `not_granted`, saying that dnshelper may need updating. dnsapi's minimum dnshelper stays 0.7.0:
+  only this endpoint needs the newer one. The 403 is from the sources (2026-11-25): ns8-core's
+  api-server (`core/api-server/middleware/middleware.go`) has an `Authorizer` that returns false
+  for an action outside the caller's roles, and gin-jwt (v3) answers that with 403; its
+  `Unauthorized` handler keeps the code. Seen on the test node (2026-11-25): "api-server answered
+  403 for module/dnshelper4/list-providers".
 
 ## ACME DNS-01 validation
 
@@ -138,7 +187,8 @@ make it safe and easy:
      `type` needs `types` to allow every type.
    - Reads return only the records inside it; `propagation` is refused outside it.
    - A restricted operator key reaches the zones but not the tenant and key endpoints.
-   - It is set when the key is made and cannot be changed: revoke the key and make another.
+   - It is set when the key is made and cannot be changed: revoke the key and make another
+     (still so after keys became editable on 2026-11-25: only label, allowlist and expiry are).
    - Without this, a leaked key on an internal host could rewrite every record of the zone.
 2. **Zones with partial access.** A zone whose dnshelper rule for dnsapi is narrower than full
    (dnshelper's ACME preset: `_acme-challenge` and `_acme-challenge.*`, TXT) can be assigned, so
@@ -370,11 +420,12 @@ manages. `configure-module` then publishes it itself, so that the Let's Encrypt 
   - One JSON request per connection, `{"target": "dnshelper" | "self", "action", "data"}`,
     answered with the task's `{"exit_code", "output", "error"}`, or `{"refused"}` or
     `{"unavailable"}`. It runs only an allowlist: on dnshelper, `list-zones`, `get-records`,
-    `list-owners`, `check-propagation`, and the four writes (`append-records`, `set-records`,
+    `list-owners`, `check-propagation`, `list-providers`, and the four writes (`append-records`, `set-records`,
     `delete-records`, `apply-changes`), which must carry `on_behalf_of`, so records written
     through the API never get dnsapi as their owner; on this module, `add-tenant`,
     `update-tenant`, `remove-tenant`, `assign-zone`, `unassign-zone`, `create-key` (never for the
-    operator), `revoke-key` and `revoke-exposed-key`. It finds dnshelper itself (discovery), so the service no longer
+    operator), `update-key` and `revoke-key` (both refuse operator keys for the module itself)
+    and `revoke-exposed-key`. It finds dnshelper itself (discovery), so the service no longer
     needs to.
   - A compromised service can then do what its API allows, and nothing else: no Traefik, no other
     action of this module, no other module.
@@ -452,7 +503,7 @@ manages. `configure-module` then publishes it itself, so that the Let's Encrypt 
 - Actions (admin UI): `configure-module` (host name, Let's Encrypt, Traefik IP allowlist, rate
   limits, the host record, revoking keys sent over plain HTTP), `get-configuration`, `list-tenants`, `add-tenant`, `update-tenant`, `remove-tenant`,
   `assign-zone`, `unassign-zone`, `list-assignable-zones`, `create-key` (takes the hash, see
-  above), `revoke-key`, `list-keys`; for the service only, `revoke-exposed-key`. Operator keys are made only by a cluster administrator; the
+  above), `update-key` (label, allowlist, expiry), `revoke-key`, `list-keys`; for the service only, `revoke-exposed-key`. Operator keys are made only by a cluster administrator; the
   API has no endpoint for them.
 - Events: on dnshelper's `service-dnshelper-changed`, drop assignments of zones dnshelper no longer
   manages (`has-zone` says `managed: false`). Log it; never fail. Changed (2026-11-21, step 6): a
@@ -469,7 +520,8 @@ manages. `configure-module` then publishes it itself, so that the Let's Encrypt 
 
 - **Status:** API URL, dnshelper found or not, how many zones are assignable.
 - **Tenants:** add, rename, disable; assign zones from the assignable list.
-- **API keys:** create (shown once, with a copy button), revoke, last used.
+- **API keys:** create (shown once, with a copy button), edit (label, allowed addresses,
+  expiry), revoke, last used.
 - **Settings:** host name, certificate, Traefik allowlist, rate limits.
 - **Activity:** recent changes from the audit lines.
 
@@ -740,7 +792,76 @@ wraps the task events in one promise, as theirs do):
      and the service's audit lines, an Activity entry and an `exposed_keys` entry in
      `get-overview` (with the tenant's name). The test keys and tenant were removed afterwards.
      Not tested on the node: the Status page's notice (checked in the `ui/dev` harness).
-9. Phase 2 (delegated zones), then phase 3 (PowerDNS hosting), as needed.
+9. Editable keys (2026-11-25, see Concepts, API key): `update-key`, `PATCH
+   /v1/tenants/{id}/keys/{key id}`, an Edit dialog on the Keys page that shows owner, access and
+   records read-only, and the changed fields on the Activity page.
+   - Unit tests: 77. The API: a PATCH changes the label and allowlist, the new allowlist applies
+     at once, the Activity entry carries the old and new values; `scope`, `restrict`, `owner` and
+     `hash` are refused (400 `not_editable`), an empty body is 400; another tenant's key, an
+     unknown and a revoked key are 404, and a tenant key cannot reach the endpoint. The broker
+     passes `update-key`.
+   - The action, run against a scratch state directory: an expired key given a later expiry
+     (with an offset, normalized to UTC) and a duplicated allowlist entry; a change to the same
+     value records nothing; a bad address and a past expiry refused; an operator key refused for
+     the module and changed by an administrator; a revoked and an unknown key refused.
+   - In the `ui/dev` harness: the revoked key has no Edit item; the dialog for the expired key
+     shows its fields and the "has expired" notice; a bad address is refused under the field;
+     a later expiry and new addresses brought it back to the active keys, with "Changed".
+   - The robot suite: through Traefik, a tenant key's allowlist and label changed (the key then
+     refused from the node with 403 `address_not_allowed`, then accepted again), `scope` refused,
+     and an operator key's label changed with `api-cli`.
+   - Tested on the test node (2026-11-25, `dnsapi4` on node 3, Rocky 9, ns8-traefik 4.2.5), after
+     `update-module` from an earlier branch image: `update-key` appeared in `selfadm`. With a
+     temporary operator key, tenant and read key, through Traefik: the allowlist changed to
+     `192.0.2.0/24` refused the key (403 `address_not_allowed`) on the next request, and changed
+     back accepted it; an expiry 40 s ahead, then 401 `key_expired` once it passed, then a later
+     expiry and the key worked again; a past expiry 400 `invalid_expiry`, a bad address 400
+     `bad_ip_address`, `scope` and `restrict` 400 `not_editable`, an empty body 400; the tenant
+     key on the endpoint, the operator key's id and another tenant's key all 404. From inside
+     the API container, the broker ran `update-key` for the tenant key and the action refused
+     the operator key (`not_permitted`); `api-cli` changed the operator key's label and
+     allowlist. A revoked key: 404 through the API, `key_revoked` from the action. Each change
+     gave the action's and the service's audit lines and an Activity entry with the old and new
+     values. Removed afterwards: the tenant with its key; the operator key is revoked, and
+     listed as such. The operator then tried the Edit dialog in the cluster admin UI on the
+     same instance; it worked as expected.
+   - Found on the node and fixed: the service's journal lines for key actions (`create-key`,
+     `update-key`, `revoke-key`) had `key=` twice, the acting key and then the key acted on.
+     The second is now `target_key=`, as it already was on the Activity page.
+10. The provider list (2026-11-25, see [Providers](#providers)): `GET /v1/providers`, and in
+    dnshelper `list-providers` in `dnsreader`.
+    - Unit tests: 81. The endpoint for an operator key and a restricted one, only the documented
+      keys passed on, the cache, 404 for tenant keys without calling dnshelper, 503
+      `not_granted`; the broker passing `list-providers`, still refusing `add-credential` and
+      `list-provider-zones`, and telling an api-server 403 apart from it being unreachable. The
+      robot suite: 404 for a tenant key, 503 `dnshelper_missing` for the operator key (CI has no
+      dnshelper).
+    - Test node (2026-11-25, `dnsapi4` on node 3, Rocky 9, through Traefik), after
+      `update-module` to the branch image: with dnshelper 0.7.0, 503 `not_granted` (the broker
+      logged the api-server's 403) while `GET /v1/zones` still answered 200. Then `dnshelper4`
+      updated to dnshelper's branch image (the operator's choice: left there until 0.7.1):
+      `update-module.d/10grants` put `list-providers` in `dnsreader` and `dnswriter`, and the
+      zones were all still there. `GET /v1/providers` 200 with 18 providers and only the
+      documented keys (Cloudflare's `api_token` and `zone_token` marked secret); a second call
+      ran no dnshelper task (the cache); a tenant key 404; the test keys revoked afterwards
+      (then 401 `key_revoked`).
+11. CI with dnshelper (2026-11-25, the operator's request: the CI screenshots showed only
+    "dnshelper is not available", and the node tests above were by hand). The robot suite installs
+    dnshelper partway through, after the cases that check dnsapi without it.
+    - dnshelper is a pinned release (`DNSHELPER_IMAGE`, 0.7.1, the first with `list-providers`
+      for modules), not `latest`, so a change on dnshelper's master cannot fail dnsapi's CI. It is
+      raised by hand when dnsapi needs more.
+    - Its DNS host is a throwaway PowerDNS on the node's loopback, as in dnshelper's own suite,
+      with four zones: the "API module (all records)" rule on two, the ACME preset on one, no
+      rule on the last. No real DNS host or credential, as for every robot test.
+    - The API host name is in one of those zones, so the host record is published and the
+      reserved name can be tested. A record is marked as `mail1`'s in dnshelper's owner index
+      (as dnshelper's suite does) for `owned_by`.
+    - Covered: everything step 6 tested by hand except rate limits, backup and restore, and
+      Let's Encrypt; plus the host record, the providers, the prune when dnshelper drops a zone,
+      and dnsapi finding dnshelper added and removed. Not covered: `propagation`, which asks a
+      zone's public name servers.
+12. Phase 2 (delegated zones), then phase 3 (PowerDNS hosting), as needed.
 
 ## Further hardening (not built)
 

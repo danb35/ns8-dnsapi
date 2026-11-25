@@ -66,6 +66,7 @@ The schemas are in `imageroot/actions/<action>/validate-*.json`.
 | `assign-zone`, `unassign-zone` | `tenant`, `zone` | a zone dnshelper lets dnsapi write in; at most one tenant per zone |
 | `list-assignable-zones` | none | those zones, with `full` and their tenant |
 | `create-key` | `id`, `hash`, `owner`, `scope`, `label`, `allowlist`, `expires`, `restrict` | stores a key from its SHA-256: the action never sees the key |
+| `update-key` | `id`; any of `label`, `allowlist`, `expires` | changes only those (a field left out keeps its value) and records `modified`; owner, scope and `restrict` are fixed; a revoked key cannot be changed; an expired key given a later expiry works again |
 | `revoke-key`, `list-keys` | `id`; optional `owner` | a revoked key keeps its record, marked `revoked` (time) and `revoked_reason` (`revoked` or `plain_http`); `list-keys` returns every key with its `status` (`active`, `expired`, `revoked`) |
 | `revoke-exposed-key` | `id`, `address` | called by the API service for a valid key it received over plain HTTP; revokes operator keys too |
 | `get-overview` | none | what the Status page shows: the API's address, the dnshelper instance, how many zones, tenants and keys, and `exposed_keys`: keys revoked in the last 7 days for being sent over plain HTTP |
@@ -73,7 +74,7 @@ The schemas are in `imageroot/actions/<action>/validate-*.json`.
 
 `bin/create-key`, run with `runagent -m dnsapi1`, makes a key, stores its hash and prints it: it
 is how the first operator key is made. The API service calls the tenant and key actions itself
-(see [How it fits together](#how-it-fits-together)); it cannot make or revoke operator keys.
+(see [How it fits together](#how-it-fits-together)); it cannot make, change or revoke operator keys.
 
 ## API
 
@@ -96,7 +97,7 @@ are `{"error": {"code", "message", "field"}}`:
 | 413 | `body_too_large` |
 | 429 | `rate_limited`, `too_many_concurrent` (more than 4 requests of one key at once), with `Retry-After` |
 | 502 | `upstream_error` (the DNS host failed), dnshelper's `auth_failed` (the DNS host refused its credentials) |
-| 503 | `dnshelper_missing`, `unavailable`, `busy` (too many requests at once for the whole service) |
+| 503 | `dnshelper_missing`, `not_granted` (dnshelper does not let dnsapi run what the request needs: dnshelper is too old for it), `unavailable`, `busy` (too many requests at once for the whole service) |
 | 504 | `upstream_timeout` |
 
 A tenant key gets 404, not 403, for a zone it does not own and for the operator endpoints, so a
@@ -116,10 +117,13 @@ key cannot be used to find out which zones are managed.
 | `GET`, `PATCH`, `DELETE /v1/tenants/{id}` | operator | read, change (`{"name", "enabled"}`), remove with its keys |
 | `PUT`, `DELETE /v1/tenants/{id}/zones/{zone}` | operator | assign, unassign a zone |
 | `GET`, `POST /v1/tenants/{id}/keys` | operator | list (`?revoked=true` to include revoked keys; each key has a `status`: `active`, `expired` or `revoked`), make a tenant key (`{"scope", "label", "allowlist", "expires", "restrict"}`); only the response holds the key |
+| `PATCH /v1/tenants/{id}/keys/{key id}` | operator | change a tenant key's `label`, `allowlist` or `expires` (fields left out keep their value; any other field is 400 `not_editable`); what a key reaches (`scope`, `restrict`) is fixed |
 | `DELETE /v1/tenants/{id}/keys/{key id}` | operator | revoke |
+| `GET /v1/providers` | operator | `{"providers": [{"name", "label", "notes", "types", "fields": [{"name", "label", "secret", "required", "default"}]}]}`: the DNS hosts dnshelper supports, the credential fields each one takes and the record types it supports (cached 10 minutes; needs a dnshelper newer than 0.7.0, otherwise 503 `not_granted`) |
 | `POST /v1/acme/present`, `/v1/acme/cleanup` | write | see [ACME endpoints](#acme-endpoints) |
 
-A restricted operator key (`restrict`) reaches the zones but not the tenant and key endpoints.
+A restricted operator key (`restrict`) reaches the zones and `GET /v1/providers`, but not the
+tenant and key endpoints.
 
 **Records** use dnshelper's shape, `{"name", "type", "ttl", "data"}`: `name` relative to the zone
 (`@` for the apex), `data` in zone-file form without quotes (TXT is one plain string of any
@@ -193,8 +197,14 @@ for whichever customer is logged in. The administrator gives it the key and the 
 - **Customer adds or deletes records**: `POST .../records`, `DELETE .../records` (exact `data`
   to delete one value of several), with a dry run first when warnings matter.
 - **Waiting for a change to be visible**: `GET .../propagation?name=&type=`.
+- **Which DNS hosts dnshelper works with**: `GET /v1/providers`, for example to tell a customer
+  whether their DNS host can be used, or which record types it takes. It is dnshelper's own list,
+  so a DNS host added to dnshelper appears there without a change to the portal. dnsapi cannot
+  add credentials or zones yet: the administrator does that in dnshelper.
 - **Customer scripts their own DNS**: `POST /v1/tenants/{id}/keys` makes a tenant key; show it
-  once. Revoke it with `DELETE .../keys/{key id}`.
+  once. Change its label, allowed addresses or expiry with `PATCH .../keys/{key id}`; revoke it
+  with `DELETE .../keys/{key id}`. A key that should reach more (write instead of read, other
+  records) is a new key.
 - **Customer leaves**: `DELETE /v1/tenants/{id}` removes the tenant and its keys and unassigns its
   zones; no record changes.
 
@@ -256,7 +266,7 @@ dnsapi is an ordinary dnshelper consumer
 - the grant is `dnshelper@any:dnswriter` (not `@cluster`: DESIGN.md, Module plumbing, says why);
 - it finds dnshelper with `list_service_providers`, the first by install order when there are
   several;
-- it calls `list-zones` (cached 30 s), `get-records`, `list-owners`,
+- it calls `list-zones` (cached 30 s), `list-providers` (cached 10 minutes), `get-records`, `list-owners`,
   `check-propagation`, and for changes `apply-changes`, `append-records`, `set-records` (mode
   `rrset`) and `delete-records`, always with `on_behalf_of="<tenant>:<key id>"`, so dnshelper's
   history names the tenant and records no owner;
@@ -290,12 +300,31 @@ restored settings and recreates the route. Restored keys keep working.
 
 ## Testing
 
-`tests/*.robot` is what CI runs on throwaway NS8 nodes (Rocky 9 and Debian 13), which have no
-dnshelper: it covers the route, the settings, keys made from the shell and through the API,
-tenants through the module's own actions, isolation, restricted keys, Basic authentication on
-the ACME endpoints, revocation, and the 503 while dnshelper is missing. To run it on your own
-node, see [Running tests
-locally](https://github.com/NethServer/ns8-github-actions/blob/v1/README.md#running-tests-locally).
+`tests/*.robot` is what CI runs on throwaway NS8 nodes (Rocky 9 and Debian 13). It runs in two
+parts:
+
+- **Without dnshelper:** the route, the settings, keys made from the shell and through the API,
+  tenants through the module's own actions, restricted keys, Basic authentication on the ACME
+  endpoints, keys sent over plain HTTP, editing and revoking keys, and the 503 while dnshelper
+  is missing.
+- **With dnshelper**, installed partway through (a pinned release, `DNSHELPER_IMAGE`), with a
+  throwaway PowerDNS on the node's loopback as its DNS host and four test zones: one rule for
+  every record on two of them, the ACME preset on one, none on the last. It covers:
+  - dnsapi finding dnshelper, the provider list, the host record published and found again;
+  - assignable zones, two tenants that cannot reach each other's zones, the zone with no rule;
+  - every write endpoint, checked against what PowerDNS holds, with `stale`, `conflict` and the
+    apex NS refused, and `on_behalf_of` in dnshelper's audit line;
+  - the reserved host name, `owned_by` and its warning, ACME `present` and `cleanup` with
+    Basic authentication, and both limits on ACME records (the key's and dnshelper's rule);
+  - a zone dnshelper drops, tenants removed with their keys, and dnshelper removed.
+
+  The propagation check is not covered: it asks a zone's public name servers. Nothing in it
+  talks to a real DNS host or uses a real credential. When an API feature needs a newer
+  dnshelper, raise `DNSHELPER_IMAGE` in `tests/dnsapi.robot`.
+
+To run it on your own node, see [Running tests
+locally](https://github.com/NethServer/ns8-github-actions/blob/v1/README.md#running-tests-locally);
+the second part installs a dnshelper, so use a node without one.
 What was tested against real zones on a node is recorded in DESIGN.md, build order.
 
 ## Author

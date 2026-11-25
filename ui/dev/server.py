@@ -147,8 +147,18 @@ def get_configuration(data):
 
 
 def configure_module(data):
-    SETTINGS.update({k: v for k, v in (data or {}).items() if k in SETTINGS})
+    data = data or {}
     time.sleep(1)  # set-route takes a while
+    # A host name starting with "norule." in example.com acts as one dnshelper has no rule for:
+    # the host record is saved as not_permitted, then the certificate fails and nothing else is
+    if data.get("host", "").startswith("norule.") and data.get("publish_host_record"):
+        HOST_RECORD.clear()
+        HOST_RECORD.update({"host": data["host"], "target": NODE_FQDN, "zone": "example.com",
+                            "status": "not_permitted", "existing": [], "message": "",
+                            "checked": "2026-11-22T10:00:00Z"})
+        if data.get("lets_encrypt"):
+            raise Refused("host", "newcert_acme_error", data["host"])
+    SETTINGS.update({k: v for k, v in data.items() if k in SETTINGS})
     return None
 
 
@@ -207,6 +217,26 @@ def create_key(data):
     return state.key_view(data["id"], KEYS[data["id"]], LAST_USED)
 
 
+def update_key(data):
+    record = KEYS[data["id"]]
+    if record.get("revoked"):
+        raise Refused("id", "key_revoked", data["id"], "a revoked key cannot be changed")
+    if "allowlist" in data:
+        bad = state.bad_networks(data["allowlist"])
+        if bad:
+            raise Refused("allowlist", "bad_ip_address", bad[0], "not an IP address or network")
+        record["allowlist"] = list(dict.fromkeys(data["allowlist"]))
+    if "expires" in data:
+        try:
+            record["expires"] = state.parse_expiry(data["expires"])
+        except ValueError as exc:
+            raise Refused("expires", "invalid_expiry", str(data["expires"]), str(exc))
+    if "label" in data:
+        record["label"] = data["label"].strip()
+    record["modified"] = state.now()
+    return state.key_view(data["id"], record, LAST_USED)
+
+
 def revoke_key(data):
     if KEYS[data["id"]].get("revoked"):
         raise Refused("id", "key_revoked", data["id"], "the key is already revoked")
@@ -235,7 +265,7 @@ MODULE_ACTIONS = {
         lambda data: {"tenants": [tenant_out(t) for t in sorted(TENANTS, key=lambda t: TENANTS[t]["name"])]},
     "add-tenant": add_tenant, "update-tenant": update_tenant, "remove-tenant": remove_tenant,
     "assign-zone": assign_zone, "unassign-zone": unassign_zone, "list-keys": list_keys,
-    "create-key": create_key, "revoke-key": revoke_key, "list-activity": list_activity, "get-status": get_status,
+    "create-key": create_key, "update-key": update_key, "revoke-key": revoke_key, "list-activity": list_activity, "get-status": get_status,
 }
 CLUSTER_ACTIONS = {
     "list-installed-modules": lambda data: INSTALLED,

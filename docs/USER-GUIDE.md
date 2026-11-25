@@ -97,8 +97,14 @@ host name relative to the zone (`dnsapi` for `dnsapi.example.com`), type `CNAME`
 - the zone is not in dnshelper, there is no rule, or the host name is a zone's apex (which
   cannot have a CNAME): add the record yourself at your DNS host.
 
-None of these stops the settings from being saved. If you change the host name, the old name's
-record stays; remove it on dnshelper's Records page, where it is listed as dnsapi's.
+None of these stops the settings from being saved by itself. But if you asked for a Let's
+Encrypt certificate and the record could not be added, the certificate usually cannot be issued,
+and then nothing is saved: Settings shows the certificate error with what dnsapi found about the
+record. dnsapi checks the record only when Settings is saved, so once you have added the rule on
+dnshelper's Access page (or the record yourself), save Settings again.
+
+If you change the host name, the old name's record stays; remove it on dnshelper's Records page,
+where it is listed as dnsapi's.
 
 No API key can change the records of the API's own host name, or of `_acme-challenge` at that
 name, even when its zone belongs to a tenant: a customer could otherwise point the API elsewhere
@@ -165,15 +171,25 @@ On the **Keys** page, **Create key** asks for:
 - a label, to remember what the key is for;
 - the records: every record, ACME challenges only (`_acme-challenge` TXT records), or some names
   and types (names relative to the zone, `*` and `?` allowed). A limited key cannot manage
-  tenants and keys, and the limit cannot be changed later: make a new key;
+  tenants and keys;
 - the addresses it may be used from, one per line;
 - optionally, a day after which it stops working.
+
+The owner, the access and the records cannot be changed once the key is made: they decide what
+the key can reach. A key that should reach more is a new key.
 
 ![Creating a key for ACME challenges, usable from one address](images/key-create.png)
 
 The key is made in your browser and shown once, with a copy button: copy it into the portal or
 the system that uses it before closing the dialog. The page lists the keys, with when each was
-last used; **Revoke** stops a key at once. If a key may have leaked, revoke it and make another.
+last used; **Revoke** stops a key at once. If a key may have leaked, revoke it and make another:
+editing a key does not change the key itself.
+
+**Edit**, in a key's menu, changes its label, the addresses it may be used from and its expiry
+day, for example when the billing server moves to a new address or a key is about to expire.
+The change applies at once and the key itself stays the same, so nothing needs to be
+redeployed. An expired key given a later day works again. The Keys page shows when a key was
+last changed, and the **Activity** page lists each change with the fields that changed.
 **Show keys** on the Tenants page lists one tenant's keys.
 
 Revoked and expired keys stay in the list, after the keys that work, greyed out and struck
@@ -205,6 +221,7 @@ From the command line, `create-key` prints the key:
         [--allowlist 203.0.113.10,198.51.100.0/24] [--expires 2027-12-31T00:00:00Z] \
         [--restrict acme | --restrict 'www,mail' --types A,AAAA]
     api-cli run module/dnsapi1/list-keys
+    api-cli run module/dnsapi1/update-key --data '{"id": "1a2b3c4d", "allowlist": ["203.0.113.20"]}'
     api-cli run module/dnsapi1/revoke-key --data '{"id": "1a2b3c4d"}'
 
 ## Connecting a billing or client portal
@@ -374,6 +391,10 @@ zone_assigned`: another tenant has it.
 
 **`503 dnshelper_missing`**: dnshelper is not installed, or dnsapi has not found it yet. Install
 it; dnsapi notices within moments.
+
+**`503 not_granted`**: dnshelper does not let dnsapi run what the request needs, because it is
+an older version. `GET /v1/providers` needs a dnshelper newer than 0.7.0: update dnshelper in
+the Software center.
 
 **A zone gives `404 zone_not_found`**: the zone is not assigned to the key's tenant, dnshelper has
 no write rule for dnsapi on it, or the zone is not in dnshelper. Check the Tenants page. A tenant key gets 404 for any zone that is not its

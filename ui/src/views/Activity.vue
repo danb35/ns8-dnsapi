@@ -218,6 +218,13 @@ export default {
       if (target) {
         parts.push(this.$t("activity.key_id", { key: target }));
       }
+      if (row.changes) {
+        // update-key: the fields that changed
+        const fields = Object.keys(row.changes).map((f) =>
+          this.$te("keys." + f) ? this.$t("keys." + f) : f
+        );
+        parts.push(this.$t("activity.changed", { fields: fields.join(", ") }));
+      }
       return parts.join(", ");
     },
     resultLabel(result) {

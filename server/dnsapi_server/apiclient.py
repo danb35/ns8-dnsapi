@@ -27,6 +27,10 @@ import urllib.request
 class Unreachable(Exception):
     """The api-server could not be reached or refused the call itself."""
 
+    def __init__(self, message, status=None):
+        super().__init__(message)
+        self.status = status  # the api-server's HTTP status, when it answered
+
 
 class Timeout(Exception):
     pass
@@ -104,7 +108,7 @@ class ApiClient:
                 time.sleep(delay)
                 delay = min(delay * 1.5, 1.0)
         except urllib.error.HTTPError as exc:
-            raise Unreachable(f"api-server answered {exc.code} for {agent_id}/{action}")
+            raise Unreachable(f"api-server answered {exc.code} for {agent_id}/{action}", exc.code)
         except (urllib.error.URLError, OSError, ValueError, KeyError) as exc:
             raise Unreachable(f"api-server unreachable for {agent_id}/{action}: {exc}")
         data = status.get("data", {})

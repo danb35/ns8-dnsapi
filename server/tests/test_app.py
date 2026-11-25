@@ -39,6 +39,14 @@ RECORDS = {
         {"name": "www", "type": "A", "ttl": 300, "data": "192.0.2.1"},
     ],
 }
+PROVIDERS = [
+    {"name": "cloudflare", "label": "Cloudflare", "types": ["A", "TXT"], "notes": "A token with Zone:DNS:Edit",
+     "fields": [{"name": "api_token", "label": "API token", "secret": True, "required": True, "later": "x"}],
+     "future": "not documented"},
+    {"name": "rfc2136", "label": "RFC 2136", "types": ["A"],
+     "fields": [{"name": "server", "label": "Server", "secret": False, "required": True},
+                {"name": "key_alg", "label": "Algorithm", "secret": False, "required": False, "default": "hmac-sha256"}]},
+]
 OWNERS = {
     "acme.test": [{"name": "@", "type": "MX", "data": "10 mail.acme.test.", "callers": ["module/mail1"],
                    "removed": [], "time": "2026-11-21T00:00:00Z"}],
@@ -66,6 +74,8 @@ class FakeBackend:
         if agent_id == "dnshelper":
             if action == "list-zones":
                 return {"zones": ZONES}
+            if action == "list-providers":
+                return {"providers": PROVIDERS}
             if action == "get-records":
                 return {"records": [dict(r) for r in RECORDS.get(data["zone"], [])]}
             if action == "list-owners":
@@ -119,6 +129,12 @@ class FakeBackend:
                 keys["keys"][data["id"]] = {"owner": data["owner"], "scope": data["scope"], "hash": data["hash"],
                                             "label": data.get("label", ""), "allowlist": [], "expires": None,
                                             "created": "2026-11-21T00:00:00Z"}
+                write_json(state, "keys.json", keys)
+                return {}
+            if action == "update-key":
+                record = keys["keys"][data["id"]]
+                record.update({k: data[k] for k in ("label", "allowlist", "expires") if k in data},
+                              modified="2026-11-25T00:00:00Z")
                 write_json(state, "keys.json", keys)
                 return {}
             if action in ("revoke-key", "revoke-exposed-key"):
@@ -472,6 +488,37 @@ class ApiTest(unittest.TestCase):
         self.request("GET", "/v1/zones", "acme")
         self.request("GET", "/v1/zones", "beta")
         self.assertEqual(sum(1 for c in self.backend.calls if c[1] == "list-zones"), 1)
+
+    def test_providers(self):
+        resp, body = self.request("GET", "/v1/providers", "operator_ro")
+        self.assertEqual(resp.status, 200, body)
+        self.assertEqual([p["name"] for p in body["providers"]], ["cloudflare", "rfc2136"])
+        cloudflare = body["providers"][0]
+        # only the documented fields, whatever a later dnshelper adds
+        self.assertEqual(cloudflare, {"name": "cloudflare", "label": "Cloudflare", "notes": "A token with Zone:DNS:Edit",
+                                      "types": ["A", "TXT"],
+                                      "fields": [{"name": "api_token", "label": "API token", "secret": True, "required": True}]})
+        self.assertEqual(body["providers"][1]["fields"][1]["default"], "hmac-sha256")
+        # a key limited to ACME records may read it too: it says nothing about any zone
+        resp, body = self.request("GET", "/v1/providers", "op_acme")
+        self.assertEqual(resp.status, 200, body)
+        # cached
+        self.assertEqual(sum(1 for c in self.backend.calls if c[1] == "list-providers"), 1)
+        resp, body = self.request("POST", "/v1/providers", "operator", body={})
+        self.assertError(resp, body, 405, "method_not_allowed")
+
+    def test_providers_not_for_tenants(self):
+        for key in ("acme", "acme_host"):
+            resp, body = self.request("GET", "/v1/providers", key)
+            self.assertError(resp, body, 404, "not_found")
+        self.assertFalse([c for c in self.backend.calls if c[1] == "list-providers"])
+
+    def test_providers_from_an_older_dnshelper(self):
+        from dnsapi_server.backend import NotGranted
+        self.backend.fail_with = NotGranted("dnshelper/list-providers is not granted to this module")
+        resp, body = self.request("GET", "/v1/providers", "operator")
+        self.assertError(resp, body, 503, "not_granted")
+        self.assertIn("list-providers", body["error"]["message"])
 
     def test_records_with_owners(self):
         resp, body = self.request("GET", "/v1/zones/acme.test/records", "acme_ro")
@@ -884,6 +931,55 @@ class ApiTest(unittest.TestCase):
         resp, again = self.request("DELETE", f"/v1/tenants/t00000002/keys/{body['id']}", "operator")
         self.assertError(resp, again, 404, "key_not_found")
 
+    def test_update_tenant_key(self):
+        key_id = self.key_id("beta")
+        path = f"/v1/tenants/t00000002/keys/{key_id}"
+        logging.disable(logging.NOTSET)
+        with self.assertLogs("dnsapi", logging.INFO) as logged:
+            resp, body = self.request("PATCH", path, "operator",
+                                      body={"label": "new label", "allowlist": ["192.0.2.0/24"]})
+        line = [entry for entry in logged.output if "update-key" in entry][-1]
+        self.assertEqual(resp.status, 200, body)
+        self.assertEqual((body["label"], body["allowlist"], body["scope"]), ("new label", ["192.0.2.0/24"], "write"))
+        self.assertEqual(body["modified"], "2026-11-25T00:00:00Z")
+        self.assertEqual(self.backend.calls[-1][1:],
+                         ("update-key", {"id": key_id, "label": "new label", "allowlist": ["192.0.2.0/24"]}))
+        entry = self.activity()[-1]
+        self.assertEqual((entry["action"], entry["target_key"], entry["tenant"]), ("update-key", key_id, "t00000002"))
+        self.assertEqual(entry["changes"]["allowlist"], [[], ["192.0.2.0/24"]])
+        # the journal line names the acting key as key and the changed one as target_key
+        self.assertEqual(len(re.findall(r'\bkey="', line)), 1)
+        self.assertIn(f' key="{self.key_id("operator")}"', line)
+        self.assertIn(f'target_key="{key_id}"', line)
+        # the new allowlist applies at once (the test client is 127.0.0.1)
+        resp, again = self.request("GET", "/v1/zones", "beta")
+        self.assertError(resp, again, 403, "address_not_allowed")
+
+    def test_update_tenant_key_refuses_fixed_fields(self):
+        path = f"/v1/tenants/t00000002/keys/{self.key_id('beta')}"
+        for name, value in (("scope", "read"), ("restrict", "acme"), ("owner", "t00000001"), ("hash", "0" * 64)):
+            resp, body = self.request("PATCH", path, "operator", body={"label": "x", name: value})
+            self.assertError(resp, body, 400, "not_editable")
+            self.assertEqual(body["error"]["field"], name)
+        resp, body = self.request("PATCH", path, "operator", body={})
+        self.assertError(resp, body, 400, "invalid_request")
+        self.assertNotIn("update-key", [c[1] for c in self.backend.calls])
+
+    def test_update_tenant_key_reach(self):
+        body = {"label": "x"}
+        # another tenant's key, an unknown or revoked one: 404
+        resp, out = self.request("PATCH", f"/v1/tenants/t00000001/keys/{self.key_id('beta')}", "operator", body=body)
+        self.assertError(resp, out, 404, "key_not_found")
+        resp, out = self.request("PATCH", "/v1/tenants/t00000002/keys/abcdef12", "operator", body=body)
+        self.assertError(resp, out, 404, "key_not_found")
+        self.backend.run("self", "revoke-key", {"id": self.key_id("beta")})
+        resp, out = self.request("PATCH", f"/v1/tenants/t00000002/keys/{self.key_id('beta')}", "operator", body=body)
+        self.assertError(resp, out, 404, "key_not_found")
+        # a tenant key cannot reach the operator endpoints
+        resp, out = self.request("PATCH", f"/v1/tenants/t00000001/keys/{self.key_id('acme')}", "acme", body=body)
+        self.assertEqual(resp.status, 404, out)
+        self.assertNotIn("update-key", [c[1] for c in self.backend.calls])
+
     def test_revoked_key_over_plain_http_is_not_revoked_again(self):
         self.backend.run("self", "revoke-key", {"id": self.key_id("acme")})
         resp, body = self.request("GET", "/v1/zones", "acme", headers={"X-Forwarded-Proto": "http"})
@@ -986,10 +1082,12 @@ class BrokerTest(unittest.TestCase):
     def test_allowlist(self):
         allowed = [
             ("dnshelper", "list-zones", {}),
+            ("dnshelper", "list-providers", {}),
             ("dnshelper", "get-records", {"zone": "x"}),
             ("dnshelper", "apply-changes", {"zone": "x", "on_behalf_of": "t1:k"}),
             ("self", "add-tenant", {"name": "x"}),
             ("self", "create-key", {"owner": "t00000001"}),
+            ("self", "update-key", {"id": "abcdef12", "label": "x"}),
             ("self", "revoke-key", {"id": "abcdef12"}),
             ("self", "revoke-exposed-key", {"id": "abcdef12", "address": "192.0.2.1"}),
         ]
@@ -997,6 +1095,8 @@ class BrokerTest(unittest.TestCase):
             ("dnshelper", "append-records", {"zone": "x"}),  # no on_behalf_of
             ("dnshelper", "set-policy", {"rules": []}),
             ("dnshelper", "add-zone", {}),
+            ("dnshelper", "add-credential", {}),
+            ("dnshelper", "list-provider-zones", {}),
             ("dnshelper", "has-zone", {"name": "x"}),
             ("self", "configure-module", {}),
             ("self", "create-key", {"owner": "operator"}),
@@ -1010,7 +1110,19 @@ class BrokerTest(unittest.TestCase):
                 self.client.run(target, action, data)
         self.assertEqual([c[1] for c in self.calls], [a[1] for a in allowed])
         self.assertEqual(self.calls[0][0], "module/dnshelper4")
-        self.assertEqual(self.calls[3][0], "module/dnsapi3")
+        self.assertEqual(self.calls[4][0], "module/dnsapi3")
+
+    def test_not_granted(self):
+        """The api-server's 403 (the role lacks the action) is told apart from it being down."""
+        from dnsapi_server import apiclient
+        from dnsapi_server.backend import NotGranted
+        for status, expected in ((403, NotGranted), (500, Unavailable)):
+            def run(agent_id, action, data, status=status):
+                raise apiclient.Unreachable(f"api-server answered {status}", status)
+            self.server.broker.client.run = run
+            with self.assertRaises(expected) as caught:
+                self.client.run("dnshelper", "list-providers", {})
+            self.assertEqual(isinstance(caught.exception, NotGranted), status == 403)
 
     def test_dnshelper_missing(self):
         self.dnshelper = None

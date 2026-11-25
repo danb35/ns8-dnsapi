@@ -20,17 +20,23 @@ import time
 from http import HTTPStatus
 
 from . import keys as keyfmt
-from .backend import DnshelperMissing, TaskFailed, TaskRefused, TaskTimeout, Unavailable
+from .backend import DnshelperMissing, NotGranted, TaskFailed, TaskRefused, TaskTimeout, Unavailable
 from .store import isoformat, parse_time
 
 log = logging.getLogger("dnsapi")
 
 TENANT_ID_RE = re.compile(r"^t[0-9a-f]{8}$")
 KEY_ID_RE = re.compile(r"^[0-9a-f]{8}$")
+# What PATCH may change on a key; the update-key action checks the values.
+EDITABLE_KEY_FIELDS = ("label", "allowlist", "expires")
 # A zone name as dnshelper accepts it (lowercase, at least one dot).
 ZONE_RE = re.compile(r"^(?=.{3,253}$)([a-z0-9_]([a-z0-9_-]{0,61}[a-z0-9_])?\.)+[a-z0-9-]{2,63}$")
 RECORD_TYPE_RE = re.compile(r"^[A-Za-z0-9]{1,10}$")
 ZONES_CACHE_SECONDS = 30.0
+# dnshelper's provider list is its built-in registry: it changes only when dnshelper is updated.
+PROVIDERS_CACHE_SECONDS = 600.0
+PROVIDER_KEYS = ("name", "label", "notes", "types", "fields")
+PROVIDER_FIELD_KEYS = ("name", "label", "secret", "required", "default")
 MAX_RECORDS = 100  # dnshelper's limit per change
 RECORD_FIELDS = {"name", "type", "ttl", "data"}
 
@@ -206,6 +212,7 @@ class Api:
         self.max_failures = max_failures
         self.clock = clock
         self.zones_cache = None  # (time, [zones])
+        self.providers_cache = None  # (time, [providers])
         self.task_slots = threading.BoundedSemaphore(MAX_TASKS)
         self.in_flight = {}  # key id -> requests in progress
         self.in_flight_lock = threading.Lock()
@@ -396,6 +403,11 @@ class Api:
         except TaskFailed:
             raise ApiError(HTTPStatus.BAD_GATEWAY, "upstream_error",
                            "The DNS host could not complete the request")
+        except NotGranted as exc:
+            log.error("%s", exc)
+            raise ApiError(HTTPStatus.SERVICE_UNAVAILABLE, "not_granted",
+                           f"dnshelper does not let this module run {action}; dnshelper may need updating",
+                           headers={"Retry-After": "300"})
         except Unavailable as exc:
             log.error("%s", exc)
             raise ApiError(HTTPStatus.SERVICE_UNAVAILABLE, "unavailable",
@@ -459,6 +471,28 @@ class Api:
             elif assigned.get(zone) == req.principal.owner:
                 result.append({"zone": zone, "provider": z.get("provider"), "full": bool(z.get("full"))})
         return HTTPStatus.OK, {"zones": result}
+
+    def list_providers(self, req):
+        """The DNS hosts dnshelper supports and the credential fields each one takes
+        (DESIGN.md, Providers). The same for every caller and nothing about the
+        administrator's credentials, but only operator keys need it."""
+        if not req.principal.is_operator:
+            raise ApiError(HTTPStatus.NOT_FOUND, "not_found", "No such endpoint")
+        with self.zones_lock:
+            cached = self.providers_cache
+            if cached and self.clock() - cached[0] < PROVIDERS_CACHE_SECONDS:
+                return HTTPStatus.OK, {"providers": cached[1]}
+        self.charge(req)
+        output = self.dnshelper(req, "list-providers", {})
+        providers = []
+        for p in output.get("providers", []):
+            # Only the fields documented in openapi.json: a later dnshelper may add more.
+            item = {k: p[k] for k in PROVIDER_KEYS if k in p and k != "fields"}
+            item["fields"] = [{k: f[k] for k in PROVIDER_FIELD_KEYS if k in f} for f in p.get("fields", [])]
+            providers.append(item)
+        with self.zones_lock:
+            self.providers_cache = (self.clock(), providers)
+        return HTTPStatus.OK, {"providers": providers}
 
     def get_records(self, req):
         zone = self.reachable_zone(req)
@@ -724,6 +758,7 @@ class Api:
             "expires": record.get("expires"),
             "restrict": record.get("restrict"),
             "created": record.get("created"),
+            "modified": record.get("modified"),
             "last_used": self.store.last_used.get(key_id),
             "status": key_status(record, self.store.clock()),
             "revoked": record.get("revoked"),
@@ -819,24 +854,53 @@ class Api:
         view = self.key_view(key_id, record) if record else {"id": key_id}
         return HTTPStatus.CREATED, {**view, "key": key}
 
-    def revoke_tenant_key(self, req):
-        self.require_operator(req)
-        self.require_write(req)
-        tenant_id = self.tenant_param(req)
+    def tenant_key_param(self, req, tenant_id):
         key_id = req.params["key"]
         record = self.store.keys().get(key_id) if KEY_ID_RE.match(key_id) else None
         if record is None or record["owner"] != tenant_id or record.get("revoked"):
             raise ApiError(HTTPStatus.NOT_FOUND, "key_not_found", "No such key")
+        return key_id, record
+
+    def update_tenant_key(self, req):
+        """Change a key's label, allowed addresses or expiry (DESIGN.md, Concepts).
+        What the key can reach (scope, restrict) is fixed: that is a new key."""
+        self.require_operator(req)
+        self.require_write(req)
+        tenant_id = self.tenant_param(req)
+        key_id, before = self.tenant_key_param(req, tenant_id)
+        body = self.body_object(req)
+        for name in body:
+            if name not in EDITABLE_KEY_FIELDS:
+                raise ApiError(HTTPStatus.BAD_REQUEST, "not_editable",
+                               f"{name} cannot be changed: revoke the key and make another", field=name)
+        if not body:
+            raise ApiError(HTTPStatus.BAD_REQUEST, "invalid_request",
+                           f"Nothing to change: give {', '.join(EDITABLE_KEY_FIELDS)}")
+        self.own_action("update-key", {"id": key_id, **body})
+        after = self.store.keys().get(key_id) or before
+        changes = {n: [before.get(n), after.get(n)] for n in EDITABLE_KEY_FIELDS
+                   if before.get(n) != after.get(n)}
+        if changes:
+            self.audit(req, "update-key", tenant=tenant_id, key=key_id, changes=changes)
+        return HTTPStatus.OK, self.key_view(key_id, after)
+
+    def revoke_tenant_key(self, req):
+        self.require_operator(req)
+        self.require_write(req)
+        tenant_id = self.tenant_param(req)
+        key_id, _ = self.tenant_key_param(req, tenant_id)
         self.own_action("revoke-key", {"id": key_id})
         self.audit(req, "revoke-key", tenant=tenant_id, key=key_id)
         return HTTPStatus.NO_CONTENT, None
 
     def audit(self, req, action, **fields):
-        details = " ".join(f'{k}="{v}"' for k, v in fields.items())
+        # "key" is who acted; a key the operator made, changed or revoked is
+        # "target_key", in the journal line as on the Activity page.
+        extra = {("target_key" if k == "key" else k): v for k, v in fields.items()}
+        details = " ".join(f'{k}="{v}"' if isinstance(v, str) else f"{k}={json.dumps(v)}"
+                           for k, v in extra.items())
         log.info('dnsapi audit: key="%s" owner="%s" address="%s" action="%s" %s result="ok"',
                  req.principal.key_id, req.principal.owner, req.client_ip, action, details)
-        # "key" is who acted; a key the operator made or revoked is "target_key"
-        extra = {("target_key" if k == "key" else k): v for k, v in fields.items()}
         self.store.append_activity({
             "source": "api", "key": req.principal.key_id, "owner": req.principal.owner,
             "address": req.client_ip, "action": action, "result": "ok", **extra,
@@ -853,13 +917,14 @@ ROUTES = [
     (rf"/v1/zones/{ZONE}/changes", {"POST": "apply_changes"}),
     (rf"/v1/zones/{ZONE}/rrsets", {"PUT": "set_rrsets"}),
     (rf"/v1/zones/{ZONE}/propagation", {"GET": "get_propagation"}),
+    (r"/v1/providers", {"GET": "list_providers"}),
     (r"/v1/acme/present", {"POST": "acme_present"}),
     (r"/v1/acme/cleanup", {"POST": "acme_cleanup"}),
     (r"/v1/tenants", {"GET": "list_tenants", "POST": "add_tenant"}),
     (rf"/v1/tenants/{TENANT}", {"GET": "get_tenant", "PATCH": "update_tenant", "DELETE": "remove_tenant"}),
     (rf"/v1/tenants/{TENANT}/zones/{ZONE}", {"PUT": "assign_zone", "DELETE": "unassign_zone"}),
     (rf"/v1/tenants/{TENANT}/keys", {"GET": "list_tenant_keys", "POST": "create_tenant_key"}),
-    (rf"/v1/tenants/{TENANT}/keys/(?P<key>[^/]+)", {"DELETE": "revoke_tenant_key"}),
+    (rf"/v1/tenants/{TENANT}/keys/(?P<key>[^/]+)", {"PATCH": "update_tenant_key", "DELETE": "revoke_tenant_key"}),
 ]
 COMPILED = [(re.compile("^" + pattern + "$"), methods) for pattern, methods in ROUTES]
 

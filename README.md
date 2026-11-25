@@ -300,12 +300,31 @@ restored settings and recreates the route. Restored keys keep working.
 
 ## Testing
 
-`tests/*.robot` is what CI runs on throwaway NS8 nodes (Rocky 9 and Debian 13), which have no
-dnshelper: it covers the route, the settings, keys made from the shell and through the API,
-tenants through the module's own actions, isolation, restricted keys, Basic authentication on
-the ACME endpoints, revocation, and the 503 while dnshelper is missing. To run it on your own
-node, see [Running tests
-locally](https://github.com/NethServer/ns8-github-actions/blob/v1/README.md#running-tests-locally).
+`tests/*.robot` is what CI runs on throwaway NS8 nodes (Rocky 9 and Debian 13). It runs in two
+parts:
+
+- **Without dnshelper:** the route, the settings, keys made from the shell and through the API,
+  tenants through the module's own actions, restricted keys, Basic authentication on the ACME
+  endpoints, keys sent over plain HTTP, editing and revoking keys, and the 503 while dnshelper
+  is missing.
+- **With dnshelper**, installed partway through (a pinned release, `DNSHELPER_IMAGE`), with a
+  throwaway PowerDNS on the node's loopback as its DNS host and four test zones: one rule for
+  every record on two of them, the ACME preset on one, none on the last. It covers:
+  - dnsapi finding dnshelper, the provider list, the host record published and found again;
+  - assignable zones, two tenants that cannot reach each other's zones, the zone with no rule;
+  - every write endpoint, checked against what PowerDNS holds, with `stale`, `conflict` and the
+    apex NS refused, and `on_behalf_of` in dnshelper's audit line;
+  - the reserved host name, `owned_by` and its warning, ACME `present` and `cleanup` with
+    Basic authentication, and both limits on ACME records (the key's and dnshelper's rule);
+  - a zone dnshelper drops, tenants removed with their keys, and dnshelper removed.
+
+  The propagation check is not covered: it asks a zone's public name servers. Nothing in it
+  talks to a real DNS host or uses a real credential. When an API feature needs a newer
+  dnshelper, raise `DNSHELPER_IMAGE` in `tests/dnsapi.robot`.
+
+To run it on your own node, see [Running tests
+locally](https://github.com/NethServer/ns8-github-actions/blob/v1/README.md#running-tests-locally);
+the second part installs a dnshelper, so use a node without one.
 What was tested against real zones on a node is recorded in DESIGN.md, build order.
 
 ## Author

@@ -845,7 +845,23 @@ wraps the task events in one promise, as theirs do):
       documented keys (Cloudflare's `api_token` and `zone_token` marked secret); a second call
       ran no dnshelper task (the cache); a tenant key 404; the test keys revoked afterwards
       (then 401 `key_revoked`).
-11. Phase 2 (delegated zones), then phase 3 (PowerDNS hosting), as needed.
+11. CI with dnshelper (2026-11-25, the operator's request: the CI screenshots showed only
+    "dnshelper is not available", and the node tests above were by hand). The robot suite installs
+    dnshelper partway through, after the cases that check dnsapi without it.
+    - dnshelper is a pinned release (`DNSHELPER_IMAGE`, 0.7.1, the first with `list-providers`
+      for modules), not `latest`, so a change on dnshelper's master cannot fail dnsapi's CI. It is
+      raised by hand when dnsapi needs more.
+    - Its DNS host is a throwaway PowerDNS on the node's loopback, as in dnshelper's own suite,
+      with four zones: the "API module (all records)" rule on two, the ACME preset on one, no
+      rule on the last. No real DNS host or credential, as for every robot test.
+    - The API host name is in one of those zones, so the host record is published and the
+      reserved name can be tested. A record is marked as `mail1`'s in dnshelper's owner index
+      (as dnshelper's suite does) for `owned_by`.
+    - Covered: everything step 6 tested by hand except rate limits, backup and restore, and
+      Let's Encrypt; plus the host record, the providers, the prune when dnshelper drops a zone,
+      and dnsapi finding dnshelper added and removed. Not covered: `propagation`, which asks a
+      zone's public name servers.
+12. Phase 2 (delegated zones), then phase 3 (PowerDNS hosting), as needed.
 
 ## Further hardening (not built)
 

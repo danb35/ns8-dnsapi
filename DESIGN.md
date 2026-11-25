@@ -13,8 +13,7 @@ or on a node.
 Status: build order steps 1 to 8 are done (the service and its route; tenants, keys,
 authentication, rate limits and the read endpoints; the write endpoints; ACME DNS-01; the admin
 UI and the OpenAPI document; the full node test; the API host name in DNS; the hardening from the
-security review); step 9 (editable keys) is done; step 10 (the provider list) is built, not yet
-tested on a node. dnshelper's side, phase 1, is released in dnshelper 0.7.0 (2026-11-21), which this
+security review); step 9 (editable keys) is done; step 10 (the provider list) is done. dnshelper's side, phase 1, is released in dnshelper 0.7.0 (2026-11-21), which this
 module needs at least.
 
 Origin: forum request, community.nethserver.org topic 28774, posts 32-37 (2026-11-18/20). The
@@ -163,7 +162,8 @@ credentials through the API), which the same post asks for; only the list is bui
   only this endpoint needs the newer one. The 403 is from the sources (2026-11-25): ns8-core's
   api-server (`core/api-server/middleware/middleware.go`) has an `Authorizer` that returns false
   for an action outside the caller's roles, and gin-jwt (v3) answers that with 403; its
-  `Unauthorized` handler keeps the code. Not yet seen on a node.
+  `Unauthorized` handler keeps the code. Seen on the test node (2026-11-25): "api-server answered
+  403 for module/dnshelper4/list-providers".
 
 ## ACME DNS-01 validation
 
@@ -836,8 +836,15 @@ wraps the task events in one promise, as theirs do):
       `list-provider-zones`, and telling an api-server 403 apart from it being unreachable. The
       robot suite: 404 for a tenant key, 503 `dnshelper_missing` for the operator key (CI has no
       dnshelper).
-    - Not yet run on a node: against dnshelper 0.7.0 (503 `not_granted`) and the dnshelper
-      branch (the list).
+    - Test node (2026-11-25, `dnsapi4` on node 3, Rocky 9, through Traefik), after
+      `update-module` to the branch image: with dnshelper 0.7.0, 503 `not_granted` (the broker
+      logged the api-server's 403) while `GET /v1/zones` still answered 200. Then `dnshelper4`
+      updated to dnshelper's branch image (the operator's choice: left there until 0.7.1):
+      `update-module.d/10grants` put `list-providers` in `dnsreader` and `dnswriter`, and the
+      zones were all still there. `GET /v1/providers` 200 with 18 providers and only the
+      documented keys (Cloudflare's `api_token` and `zone_token` marked secret); a second call
+      ran no dnshelper task (the cache); a tenant key 404; the test keys revoked afterwards
+      (then 401 `key_revoked`).
 11. Phase 2 (delegated zones), then phase 3 (PowerDNS hosting), as needed.
 
 ## Further hardening (not built)

@@ -1011,6 +1011,50 @@
      }
     }
    ],
+   "patch": {
+    "summary": "Change a tenant key's label, allowed addresses or expiry",
+    "description": "The fields left out keep their value. scope and restrict cannot be changed (400 not_editable): revoke the key and make another. The secret does not change. An expired key given a later expiry works again; a revoked key is 404.",
+    "tags": [
+     "tenants (operator)"
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/KeyUpdate"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "OK",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Key"
+        }
+       }
+      }
+     },
+     "400": {
+      "$ref": "#/components/responses/Error"
+     },
+     "401": {
+      "$ref": "#/components/responses/Error"
+     },
+     "403": {
+      "$ref": "#/components/responses/Error"
+     },
+     "404": {
+      "$ref": "#/components/responses/Error"
+     },
+     "429": {
+      "$ref": "#/components/responses/Error"
+     }
+    }
+   },
    "delete": {
     "summary": "Revoke a tenant key",
     "tags": [
@@ -1078,7 +1122,7 @@
       "properties": {
        "code": {
         "type": "string",
-        "description": "invalid_request, invalid_json, missing_key, invalid_key, key_expired, key_revoked, insufficient_scope, tenant_disabled, address_not_allowed, restricted_key, outside_restriction, not_found, zone_not_found, tenant_not_found, key_not_found, stale, conflict, zone_assigned, zone_not_assignable, reserved_name, https_required, body_too_large, rate_limited, too_many_concurrent, busy, upstream_error, upstream_timeout, unavailable, dnshelper_missing, and dnshelper's own codes such as not_permitted and forbidden"
+        "description": "invalid_request, not_editable, invalid_json, missing_key, invalid_key, key_expired, key_revoked, insufficient_scope, tenant_disabled, address_not_allowed, restricted_key, outside_restriction, not_found, zone_not_found, tenant_not_found, key_not_found, stale, conflict, zone_assigned, zone_not_assignable, reserved_name, https_required, body_too_large, rate_limited, too_many_concurrent, busy, upstream_error, upstream_timeout, unavailable, dnshelper_missing, and dnshelper's own codes such as not_permitted and forbidden"
        },
        "message": {
         "type": "string"
@@ -1628,6 +1672,14 @@
       ],
       "format": "date-time"
      },
+     "modified": {
+      "type": [
+       "string",
+       "null"
+      ],
+      "format": "date-time",
+      "description": "When the label, allowed addresses or expiry were last changed"
+     },
      "last_used": {
       "type": [
        "string",
@@ -1702,6 +1754,32 @@
      },
      "restrict": {
       "$ref": "#/components/schemas/Restrict"
+     }
+    }
+   },
+   "KeyUpdate": {
+    "type": "object",
+    "minProperties": 1,
+    "additionalProperties": false,
+    "properties": {
+     "label": {
+      "type": "string",
+      "maxLength": 100
+     },
+     "allowlist": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "description": "IP addresses or CIDR networks; empty for any"
+     },
+     "expires": {
+      "type": [
+       "string",
+       "null"
+      ],
+      "format": "date-time",
+      "description": "In the future; null for never"
      }
     }
    },

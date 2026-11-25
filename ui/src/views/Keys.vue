@@ -114,6 +114,11 @@
                     size="sm"
                   />
                   <div class="secondary">dnsapi_{{ row.id }}_…</div>
+                  <div v-if="row.modified && !row.revoked" class="secondary">
+                    {{
+                      $t("keys.modified_on", { time: formatTime(row.modified) })
+                    }}
+                  </div>
                   <div v-if="row.revoked" class="secondary">
                     {{
                       $t(
@@ -162,6 +167,9 @@
                     flip-menu
                     class="table-overflow-menu"
                   >
+                    <cv-overflow-menu-item @click="showEdit(row)">
+                      <NsMenuItem :icon="Edit20" :label="$t('keys.edit')" />
+                    </cv-overflow-menu-item>
                     <cv-overflow-menu-item danger @click="showRevoke(row)">
                       <NsMenuItem
                         :icon="TrashCan20"
@@ -184,6 +192,13 @@
       :apiUrl="apiUrl"
       @hide="isCreateShown = false"
       @created="load"
+    />
+    <EditKeyModal
+      :isShown="isEditShown"
+      :keyRecord="current"
+      :tenants="tenants"
+      @hide="isEditShown = false"
+      @updated="load"
     />
     <ConfirmDeleteModal
       :isShown="isRevokeShown"
@@ -217,10 +232,11 @@ import {
 import DnsapiService from "../mixins/dnsapi";
 import CreateKeyModal from "../components/CreateKeyModal.vue";
 import ConfirmDeleteModal from "../components/ConfirmDeleteModal.vue";
+import EditKeyModal from "../components/EditKeyModal.vue";
 
 export default {
   name: "Keys",
-  components: { CreateKeyModal, ConfirmDeleteModal },
+  components: { CreateKeyModal, EditKeyModal, ConfirmDeleteModal },
   mixins: [
     DnsapiService,
     QueryParamService,
@@ -242,6 +258,7 @@ export default {
       current: null,
       isCreateShown: false,
       isRevokeShown: false,
+      isEditShown: false,
       showInactive: true,
       loading: { load: false, revoke: false },
       error: { load: "", revoke: "" },
@@ -279,13 +296,14 @@ export default {
         : this.keys;
     },
     inactiveCount() {
-      return this.ownerKeys.filter((k) => this.statusOf(k) !== "active")
-        .length;
+      return this.ownerKeys.filter((k) => this.statusOf(k) !== "active").length;
     },
     shownKeys() {
       // Revoked and expired keys are kept (DESIGN.md, Concepts): listed after
       // the keys that work, dimmed, unless the box is unticked.
-      const active = this.ownerKeys.filter((k) => this.statusOf(k) === "active");
+      const active = this.ownerKeys.filter(
+        (k) => this.statusOf(k) === "active"
+      );
       if (!this.showInactive) {
         return active;
       }
@@ -375,6 +393,10 @@ export default {
         });
       }
       return this.formatTime(iso);
+    },
+    showEdit(row) {
+      this.current = row;
+      this.isEditShown = true;
     },
     showRevoke(row) {
       this.current = row;

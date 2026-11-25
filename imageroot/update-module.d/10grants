@@ -13,4 +13,4 @@ exec 1>&2
 redis-exec SADD "${AGENT_ID}/roles/selfadm" \
     add-tenant update-tenant remove-tenant \
     assign-zone unassign-zone \
-    create-key revoke-key revoke-exposed-key
+    create-key update-key revoke-key revoke-exposed-key

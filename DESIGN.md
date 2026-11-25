@@ -13,7 +13,7 @@ or on a node.
 Status: build order steps 1 to 8 are done (the service and its route; tenants, keys,
 authentication, rate limits and the read endpoints; the write endpoints; ACME DNS-01; the admin
 UI and the OpenAPI document; the full node test; the API host name in DNS; the hardening from the
-security review). dnshelper's side, phase 1, is released in dnshelper 0.7.0 (2026-11-21), which this
+security review); step 9 (editable keys) is done. dnshelper's side, phase 1, is released in dnshelper 0.7.0 (2026-11-21), which this
 module needs at least.
 
 Origin: forum request, community.nethserver.org topic 28774, posts 32-37 (2026-11-18/20). The
@@ -78,6 +78,26 @@ means:
     revoked keys out unless `?revoked=true`, so existing portals see no change. The tenant and
     Status page counts are of active keys only. `remove-tenant` still deletes its keys: they
     would have no owner to list them under. Kept without limit: a record is a few hundred bytes.
+  - A key's label, allowlist and expiry can be changed (decision 2026-11-25, from the operator;
+    the earlier position was that nothing could be). Its owner, scope and `restrict` stay fixed:
+    they decide what the key can reach, and a key handed to a less-trusted host (an ACME client
+    on an internal box, a customer's script) must not gain reach after it was given out. A key
+    that should reach more is a new key. The secret does not change either, so a key that may
+    have leaked is still revoked, not edited.
+    - `update-key` (`id`, and any of `label`, `allowlist`, `expires`; a field left out keeps its
+      value) records `modified` (the time) on the key and an audit line and Activity entry with
+      each changed field's old and new value. A revoked key cannot be changed (`key_revoked`);
+      revocation stays final.
+    - An expired key given a later expiry works again: it is the same as making a new key with
+      the same settings, without redeploying it. The new expiry must be in the future, as at
+      creation.
+    - Through the API: `PATCH /v1/tenants/{id}/keys/{key id}` for tenant keys; any other field
+      is 400 `not_editable`, and a revoked key is 404 as for `DELETE`. Like `create-key` and
+      `revoke-key`, the action refuses operator keys when the module itself calls it, so the
+      service cannot change an operator key's allowlist or expiry. For tenant keys it gives a
+      compromised service nothing new: it can already make tenant keys with any settings.
+    - Changes apply on the next request: the service reloads `keys.json` when it changes. Rate
+      and concurrency counts are kept by key id, so they carry over.
 - **Key format:** `dnsapi_<id>_<secret>`. The id (8 hex) finds the record. The secret (32 random
   bytes, base32) is stored only as its SHA-256 hash, which is enough for a random secret of that
   length. The full key is shown once, at creation; there is no way to read it back. The prefix
@@ -106,7 +126,7 @@ and SOA read-only.
 | `GET /v1/zones/{zone}/propagation?name=&type=` | any | `check-propagation` (in dnshelper's `dnsreader` role since 0.7.0) |
 | `GET/POST/PATCH/DELETE /v1/tenants[/{id}]` | operator | none (dnsapi's own state) |
 | `PUT/DELETE /v1/tenants/{id}/zones/{zone}` | operator | `list-zones` checks that dnsapi may write in it (`access: "write"`; `full` or not) |
-| `POST/DELETE /v1/tenants/{id}/keys[/{key id}]` | operator | none |
+| `POST/PATCH/DELETE /v1/tenants/{id}/keys[/{key id}]` | operator | none (`PATCH` changes only `label`, `allowlist`, `expires`) |
 | `POST /v1/acme/present`, `POST /v1/acme/cleanup` `{fqdn, value}` | write | `append-records`, `delete-records` of one `_acme-challenge` TXT record (see [ACME DNS-01 validation](#acme-dns-01-validation)) |
 | `GET /v1/status` | none | none (liveness only, says nothing about zones) |
 
@@ -138,7 +158,8 @@ make it safe and easy:
      `type` needs `types` to allow every type.
    - Reads return only the records inside it; `propagation` is refused outside it.
    - A restricted operator key reaches the zones but not the tenant and key endpoints.
-   - It is set when the key is made and cannot be changed: revoke the key and make another.
+   - It is set when the key is made and cannot be changed: revoke the key and make another
+     (still so after keys became editable on 2026-11-25: only label, allowlist and expiry are).
    - Without this, a leaked key on an internal host could rewrite every record of the zone.
 2. **Zones with partial access.** A zone whose dnshelper rule for dnsapi is narrower than full
    (dnshelper's ACME preset: `_acme-challenge` and `_acme-challenge.*`, TXT) can be assigned, so
@@ -374,7 +395,8 @@ manages. `configure-module` then publishes it itself, so that the Let's Encrypt 
     `delete-records`, `apply-changes`), which must carry `on_behalf_of`, so records written
     through the API never get dnsapi as their owner; on this module, `add-tenant`,
     `update-tenant`, `remove-tenant`, `assign-zone`, `unassign-zone`, `create-key` (never for the
-    operator), `revoke-key` and `revoke-exposed-key`. It finds dnshelper itself (discovery), so the service no longer
+    operator), `update-key` and `revoke-key` (both refuse operator keys for the module itself)
+    and `revoke-exposed-key`. It finds dnshelper itself (discovery), so the service no longer
     needs to.
   - A compromised service can then do what its API allows, and nothing else: no Traefik, no other
     action of this module, no other module.
@@ -452,7 +474,7 @@ manages. `configure-module` then publishes it itself, so that the Let's Encrypt 
 - Actions (admin UI): `configure-module` (host name, Let's Encrypt, Traefik IP allowlist, rate
   limits, the host record, revoking keys sent over plain HTTP), `get-configuration`, `list-tenants`, `add-tenant`, `update-tenant`, `remove-tenant`,
   `assign-zone`, `unassign-zone`, `list-assignable-zones`, `create-key` (takes the hash, see
-  above), `revoke-key`, `list-keys`; for the service only, `revoke-exposed-key`. Operator keys are made only by a cluster administrator; the
+  above), `update-key` (label, allowlist, expiry), `revoke-key`, `list-keys`; for the service only, `revoke-exposed-key`. Operator keys are made only by a cluster administrator; the
   API has no endpoint for them.
 - Events: on dnshelper's `service-dnshelper-changed`, drop assignments of zones dnshelper no longer
   manages (`has-zone` says `managed: false`). Log it; never fail. Changed (2026-11-21, step 6): a
@@ -469,7 +491,8 @@ manages. `configure-module` then publishes it itself, so that the Let's Encrypt 
 
 - **Status:** API URL, dnshelper found or not, how many zones are assignable.
 - **Tenants:** add, rename, disable; assign zones from the assignable list.
-- **API keys:** create (shown once, with a copy button), revoke, last used.
+- **API keys:** create (shown once, with a copy button), edit (label, allowed addresses,
+  expiry), revoke, last used.
 - **Settings:** host name, certificate, Traefik allowlist, rate limits.
 - **Activity:** recent changes from the audit lines.
 
@@ -740,7 +763,43 @@ wraps the task events in one promise, as theirs do):
      and the service's audit lines, an Activity entry and an `exposed_keys` entry in
      `get-overview` (with the tenant's name). The test keys and tenant were removed afterwards.
      Not tested on the node: the Status page's notice (checked in the `ui/dev` harness).
-9. Phase 2 (delegated zones), then phase 3 (PowerDNS hosting), as needed.
+9. Editable keys (2026-11-25, see Concepts, API key): `update-key`, `PATCH
+   /v1/tenants/{id}/keys/{key id}`, an Edit dialog on the Keys page that shows owner, access and
+   records read-only, and the changed fields on the Activity page.
+   - Unit tests: 77. The API: a PATCH changes the label and allowlist, the new allowlist applies
+     at once, the Activity entry carries the old and new values; `scope`, `restrict`, `owner` and
+     `hash` are refused (400 `not_editable`), an empty body is 400; another tenant's key, an
+     unknown and a revoked key are 404, and a tenant key cannot reach the endpoint. The broker
+     passes `update-key`.
+   - The action, run against a scratch state directory: an expired key given a later expiry
+     (with an offset, normalized to UTC) and a duplicated allowlist entry; a change to the same
+     value records nothing; a bad address and a past expiry refused; an operator key refused for
+     the module and changed by an administrator; a revoked and an unknown key refused.
+   - In the `ui/dev` harness: the revoked key has no Edit item; the dialog for the expired key
+     shows its fields and the "has expired" notice; a bad address is refused under the field;
+     a later expiry and new addresses brought it back to the active keys, with "Changed".
+   - The robot suite: through Traefik, a tenant key's allowlist and label changed (the key then
+     refused from the node with 403 `address_not_allowed`, then accepted again), `scope` refused,
+     and an operator key's label changed with `api-cli`.
+   - Tested on the test node (2026-11-25, `dnsapi4` on node 3, Rocky 9, ns8-traefik 4.2.5), after
+     `update-module` from an earlier branch image: `update-key` appeared in `selfadm`. With a
+     temporary operator key, tenant and read key, through Traefik: the allowlist changed to
+     `192.0.2.0/24` refused the key (403 `address_not_allowed`) on the next request, and changed
+     back accepted it; an expiry 40 s ahead, then 401 `key_expired` once it passed, then a later
+     expiry and the key worked again; a past expiry 400 `invalid_expiry`, a bad address 400
+     `bad_ip_address`, `scope` and `restrict` 400 `not_editable`, an empty body 400; the tenant
+     key on the endpoint, the operator key's id and another tenant's key all 404. From inside
+     the API container, the broker ran `update-key` for the tenant key and the action refused
+     the operator key (`not_permitted`); `api-cli` changed the operator key's label and
+     allowlist. A revoked key: 404 through the API, `key_revoked` from the action. Each change
+     gave the action's and the service's audit lines and an Activity entry with the old and new
+     values. Removed afterwards: the tenant with its key; the operator key is revoked, and
+     listed as such. The operator then tried the Edit dialog in the cluster admin UI on the
+     same instance; it worked as expected.
+   - Found on the node and fixed: the service's journal lines for key actions (`create-key`,
+     `update-key`, `revoke-key`) had `key=` twice, the acting key and then the key acted on.
+     The second is now `target_key=`, as it already was on the Activity page.
+10. Phase 2 (delegated zones), then phase 3 (PowerDNS hosting), as needed.
 
 ## Further hardening (not built)
 

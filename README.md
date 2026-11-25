@@ -66,6 +66,7 @@ The schemas are in `imageroot/actions/<action>/validate-*.json`.
 | `assign-zone`, `unassign-zone` | `tenant`, `zone` | a zone dnshelper lets dnsapi write in; at most one tenant per zone |
 | `list-assignable-zones` | none | those zones, with `full` and their tenant |
 | `create-key` | `id`, `hash`, `owner`, `scope`, `label`, `allowlist`, `expires`, `restrict` | stores a key from its SHA-256: the action never sees the key |
+| `update-key` | `id`; any of `label`, `allowlist`, `expires` | changes only those (a field left out keeps its value) and records `modified`; owner, scope and `restrict` are fixed; a revoked key cannot be changed; an expired key given a later expiry works again |
 | `revoke-key`, `list-keys` | `id`; optional `owner` | a revoked key keeps its record, marked `revoked` (time) and `revoked_reason` (`revoked` or `plain_http`); `list-keys` returns every key with its `status` (`active`, `expired`, `revoked`) |
 | `revoke-exposed-key` | `id`, `address` | called by the API service for a valid key it received over plain HTTP; revokes operator keys too |
 | `get-overview` | none | what the Status page shows: the API's address, the dnshelper instance, how many zones, tenants and keys, and `exposed_keys`: keys revoked in the last 7 days for being sent over plain HTTP |
@@ -73,7 +74,7 @@ The schemas are in `imageroot/actions/<action>/validate-*.json`.
 
 `bin/create-key`, run with `runagent -m dnsapi1`, makes a key, stores its hash and prints it: it
 is how the first operator key is made. The API service calls the tenant and key actions itself
-(see [How it fits together](#how-it-fits-together)); it cannot make or revoke operator keys.
+(see [How it fits together](#how-it-fits-together)); it cannot make, change or revoke operator keys.
 
 ## API
 
@@ -116,6 +117,7 @@ key cannot be used to find out which zones are managed.
 | `GET`, `PATCH`, `DELETE /v1/tenants/{id}` | operator | read, change (`{"name", "enabled"}`), remove with its keys |
 | `PUT`, `DELETE /v1/tenants/{id}/zones/{zone}` | operator | assign, unassign a zone |
 | `GET`, `POST /v1/tenants/{id}/keys` | operator | list (`?revoked=true` to include revoked keys; each key has a `status`: `active`, `expired` or `revoked`), make a tenant key (`{"scope", "label", "allowlist", "expires", "restrict"}`); only the response holds the key |
+| `PATCH /v1/tenants/{id}/keys/{key id}` | operator | change a tenant key's `label`, `allowlist` or `expires` (fields left out keep their value; any other field is 400 `not_editable`); what a key reaches (`scope`, `restrict`) is fixed |
 | `DELETE /v1/tenants/{id}/keys/{key id}` | operator | revoke |
 | `POST /v1/acme/present`, `/v1/acme/cleanup` | write | see [ACME endpoints](#acme-endpoints) |
 
@@ -194,7 +196,9 @@ for whichever customer is logged in. The administrator gives it the key and the 
   to delete one value of several), with a dry run first when warnings matter.
 - **Waiting for a change to be visible**: `GET .../propagation?name=&type=`.
 - **Customer scripts their own DNS**: `POST /v1/tenants/{id}/keys` makes a tenant key; show it
-  once. Revoke it with `DELETE .../keys/{key id}`.
+  once. Change its label, allowed addresses or expiry with `PATCH .../keys/{key id}`; revoke it
+  with `DELETE .../keys/{key id}`. A key that should reach more (write instead of read, other
+  records) is a new key.
 - **Customer leaves**: `DELETE /v1/tenants/{id}` removes the tenant and its keys and unassigns its
   zones; no record changes.
 

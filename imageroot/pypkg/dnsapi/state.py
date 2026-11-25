@@ -11,8 +11,8 @@
 #                       "publish_host_record", "revoke_cleartext_keys"}
 #   api/tenants.json   {"tenants": {"t1a2b3c4d": {"name", "enabled", "zones", "created"}}}
 #   api/keys.json      {"keys": {"a1b2c3d4": {"owner", "scope", "hash", "label",
-#                                         "allowlist", "expires", "created",
-#                                         "revoked", "revoked_reason"}}}
+#                                         "allowlist", "expires", "restrict", "created",
+#                                         "modified", "revoked", "revoked_reason"}}}
 #                  A revoked key keeps its record, with the time it was revoked,
 #                  so that it can still be listed; it is refused like an unknown one.
 #   api/runtime.json   {"dnshelper": "module/dnshelper1" | null, "proxies_depth": 0}
@@ -174,7 +174,8 @@ def audit(action, **fields):
     """One journal line, and an entry for the admin UI's Activity page. Changes
     the API service makes through these actions are recorded by the service
     itself (usage/activity.jsonl), so they are not repeated here."""
-    details = " ".join(f'{k}="{v}"' for k, v in fields.items())
+    details = " ".join(f'{k}="{v}"' if isinstance(v, str) else f"{k}={json.dumps(v)}"
+                       for k, v in fields.items())
     print(f'dnsapi audit: caller="{caller()}" action="{action}" {details}', file=sys.stderr)
     if caller() == os.environ.get("AGENT_ID"):
         return
@@ -277,6 +278,7 @@ def key_view(key_id, record, used=None):
         "expires": record.get("expires"),
         "restrict": record.get("restrict"),
         "created": record.get("created"),
+        "modified": record.get("modified"),
         "last_used": (used or {}).get(key_id),
         "status": key_status(record),
         "revoked": record.get("revoked"),
@@ -372,3 +374,49 @@ def add_key(key_id, key_hash, owner, scope, label="", allowlist=None, expires=No
     }
     save_keys(all_keys)
     return None
+
+
+# What update_key may change (DESIGN.md, Concepts, decision 2026-11-25). Owner,
+# scope and restrict are fixed: a key on a less-trusted host must not gain
+# reach after it was handed out; widening it means a new key.
+EDITABLE_KEY_FIELDS = ("label", "allowlist", "expires")
+
+
+def update_key(key_id, changes):
+    """Change a key's label, allowlist or expiry (the caller holds locked()).
+    `changes` holds only the fields to change. Return (error, changed): error is
+    (field, code, value, message) or None; changed maps each field whose value
+    changed to [old, new]. An expired key can be given a later expiry, which
+    makes it work again; a revoked key cannot be changed."""
+    all_keys = keys()
+    record = all_keys.get(key_id)
+    if record is None:
+        return ("id", "key_not_found", key_id, "no such key"), {}
+    if record.get("revoked"):
+        return ("id", "key_revoked", key_id, "a revoked key cannot be changed"), {}
+    new = {}
+    if "label" in changes:
+        new["label"] = (changes["label"] or "").strip()
+    if "allowlist" in changes:
+        allowlist = list(dict.fromkeys(changes["allowlist"] or []))
+        bad = bad_networks(allowlist)
+        if bad:
+            return ("allowlist", "bad_ip_address", bad[0], "not an IP address or network"), {}
+        new["allowlist"] = allowlist
+    if "expires" in changes:
+        try:
+            new["expires"] = parse_expiry(changes["expires"])
+        except ValueError as exc:
+            return ("expires", "invalid_expiry", str(changes["expires"]), str(exc)), {}
+    changed = {}
+    for name, value in new.items():
+        old = record.get(name, "" if name == "label" else None)
+        if name == "allowlist":
+            old = old or []
+        if old != value:
+            changed[name] = [old, value]
+            record[name] = value
+    if changed:
+        record["modified"] = now()
+        save_keys(all_keys)
+    return None, changed

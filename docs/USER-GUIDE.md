@@ -41,7 +41,8 @@ customer (tenant) owns which zone, and what each key may do.
 ## Before you start
 
 - **dnshelper 0.7.0 or later**, with the zones you want to manage added to it. Older releases do
-  not tell dnsapi how much it may change, and dnsapi then offers no zones.
+  not tell dnsapi how much it may change, and dnsapi then offers no zones. Listing DNS hosts
+  (`GET /v1/providers`) needs dnshelper 0.7.1.
 - **A host name for the API**, such as `dnsapi.example.com`, with a DNS record pointing to the
   node; when the name is in a zone dnshelper manages, dnsapi can add the record itself (see
   [below](#publishing-the-api)). It must not be used by another application on the node.
@@ -393,7 +394,7 @@ zone_assigned`: another tenant has it.
 it; dnsapi notices within moments.
 
 **`503 not_granted`**: dnshelper does not let dnsapi run what the request needs, because it is
-an older version. `GET /v1/providers` needs a dnshelper newer than 0.7.0: update dnshelper in
+an older version. `GET /v1/providers` needs dnshelper 0.7.1 or later: update dnshelper in
 the Software center.
 
 **A zone gives `404 zone_not_found`**: the zone is not assigned to the key's tenant, dnshelper has

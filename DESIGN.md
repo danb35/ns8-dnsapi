@@ -13,8 +13,9 @@ or on a node.
 Status: build order steps 1 to 8 are done (the service and its route; tenants, keys,
 authentication, rate limits and the read endpoints; the write endpoints; ACME DNS-01; the admin
 UI and the OpenAPI document; the full node test; the API host name in DNS; the hardening from the
-security review); step 9 (editable keys) is done; step 10 (the provider list) is done. dnshelper's side, phase 1, is released in dnshelper 0.7.0 (2026-11-21), which this
-module needs at least.
+security review); steps 9 to 11 (editable keys, the provider list, CI with dnshelper) are done,
+and released as 0.1.0. dnshelper's side, phase 1, is released in dnshelper 0.7.0 (2026-11-21),
+which this module needs at least; `GET /v1/providers` needs dnshelper 0.7.1.
 
 Origin: forum request, community.nethserver.org topic 28774, posts 32-37 (2026-11-18/20). The
 ACME DNS-01 use was added by the operator on 2026-11-21.
@@ -843,7 +844,7 @@ wraps the task events in one promise, as theirs do):
      write with `on_behalf_of="<tenant>:<key id>"`; a write took 0.8 s, a read 0.42 s; the zone
      ended with its SOA and NS only.
    - Not covered: a Let's Encrypt certificate for the API's own host name (no public DNS record
-     for the test host name), and `owned_by` for a record another module wrote through its own
+     for the test host name; done later on a real node, see step 7), and `owned_by` for a record another module wrote through its own
      rule (only a record dnsapi wrote without `on_behalf_of`).
 7. The API host name in DNS: the CNAME to the node before `set-route`, the reserved name, the
    Status and Settings pages; a node test with a real Let's Encrypt certificate for the API's
@@ -866,8 +867,11 @@ wraps the task events in one promise, as theirs do):
    - In the browser: Settings with the switch and the notice; Status with the notice when the
      record needs attention. Found there and fixed: Settings lacked the shared mixin and did not
      render; the not-permitted notice now names the rule's name relative to the zone.
-   - Not tested: the wait for the name servers before a real certificate, and the certificate
-     itself, which need the node's host name to resolve publicly and port 80 to reach the node.
+   - Not tested on the test node: the wait for the name servers before a real certificate, and
+     the certificate itself, which need the node's host name to resolve publicly and port 80 to
+     reach the node. Reported by the operator (2026-11-26) from a real install
+     (`ns8.familybrown.org`, 0.1.0-testing.3): `configure-module` published the CNAME for the
+     API's host name, and Let's Encrypt issued its certificate through it.
 8. Hardening from the security review: the broker (the service holds no NS8 credentials), HTTPS
    only, concurrency limits, the IPv6 /64 throttle; the service's files moved to `state/api/`.
    **Done** (2026-11-21):

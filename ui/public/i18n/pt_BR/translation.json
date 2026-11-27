@@ -258,7 +258,8 @@
         "action_add_zone": "Domínio adicionado",
         "action_remove_zone": "Domínio removido",
         "action_provision": "Registros gravados uma vez",
-        "dns_host": "Provedor de DNS {provider}"
+        "dns_host": "Provedor de DNS {provider}",
+        "action_update_zone": "Credenciais de um domínio alteradas"
     },
     "host_record": {
         "title_ok": "O nome de host aponta para este nó",

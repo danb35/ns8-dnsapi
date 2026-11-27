@@ -258,7 +258,8 @@
         "action_add_zone": "டொமைன் சேர்க்கப்பட்டது",
         "action_remove_zone": "டொமைன் நீக்கப்பட்டது",
         "action_provision": "பதிவுகள் ஒருமுறை எழுதப்பட்டன",
-        "dns_host": "DNS வழங்குநர் {provider}"
+        "dns_host": "DNS வழங்குநர் {provider}",
+        "action_update_zone": "டொமைனின் சான்றுகள் மாற்றப்பட்டன"
     },
     "host_record": {
         "title_ok": "ஹோஸ்ட் பெயர் இந்தக் கணுவைச் சுட்டுகிறது",

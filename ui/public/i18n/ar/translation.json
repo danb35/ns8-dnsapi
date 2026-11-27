@@ -258,7 +258,8 @@
         "action_add_zone": "إضافة نطاق",
         "action_remove_zone": "إزالة نطاق",
         "action_provision": "كتابة سجلات لمرة واحدة",
-        "dns_host": "مزوّد DNS {provider}"
+        "dns_host": "مزوّد DNS {provider}",
+        "action_update_zone": "تغيير بيانات اعتماد نطاق"
     },
     "host_record": {
         "title_ok": "اسم المضيف يشير إلى هذه العقدة",

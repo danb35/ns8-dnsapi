@@ -107,6 +107,8 @@ def seed():
         {**api, "time": stamp(14), "key": "4c1e9a07", "owner": "operator", "tenant": "",
          "action": "append-records", "zone": "corner-mail.example",
          "add": ["@ TXT v=spf1 include:_spf.mail.example.com ~all"], "remove": []},
+        {**api, "time": stamp(5), "key": "4c1e9a07", "owner": "operator", "action": "update-zone",
+         "zone": "bakery.example", "provider": "powerdns", "tenant": "t81c0d4e7", "result": "ok"},
         {**api, "time": stamp(20), "key": "4c1e9a07", "owner": "operator", "action": "add-zone",
          "zone": "bakery.example", "provider": "powerdns", "tenant": "t81c0d4e7", "result": "ok"},
         {**api, "time": stamp(21), "key": "4c1e9a07", "owner": "operator", "action": "add-zone",

@@ -258,7 +258,8 @@
         "action_add_zone": "Domain hinzugefügt",
         "action_remove_zone": "Domain entfernt",
         "action_provision": "Einträge einmalig geschrieben",
-        "dns_host": "DNS-Anbieter {provider}"
+        "dns_host": "DNS-Anbieter {provider}",
+        "action_update_zone": "Zugangsdaten einer Domain geändert"
     },
     "host_record": {
         "title_ok": "Der Hostname zeigt auf diesen Knoten",

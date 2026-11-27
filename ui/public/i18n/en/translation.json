@@ -258,7 +258,8 @@
         "action_add_zone": "Added a domain",
         "action_remove_zone": "Removed a domain",
         "action_provision": "Wrote records once",
-        "dns_host": "DNS host {provider}"
+        "dns_host": "DNS host {provider}",
+        "action_update_zone": "Changed a domain's credentials"
     },
     "host_record": {
         "title_ok": "The host name points to this node",

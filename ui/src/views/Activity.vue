@@ -205,7 +205,9 @@ export default {
     details(row) {
       const parts = [];
       // a domain added through the API names its tenant beside the zone
-      const domain = ["add-zone", "remove-zone"].includes(row.action);
+      const domain = ["add-zone", "update-zone", "remove-zone"].includes(
+        row.action
+      );
       if (row.tenant && (!row.zone || domain)) {
         // the name recorded with the change, for a tenant removed since
         const known = this.tenants.some((t) => t.id === row.tenant);

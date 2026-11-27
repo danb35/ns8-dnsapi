@@ -258,7 +258,8 @@
         "action_add_zone": "Домен додано",
         "action_remove_zone": "Домен вилучено",
         "action_provision": "Записи записано одноразово",
-        "dns_host": "DNS-провайдер {provider}"
+        "dns_host": "DNS-провайдер {provider}",
+        "action_update_zone": "Облікові дані домену змінено"
     },
     "host_record": {
         "title_ok": "Ім'я хоста вказує на цей вузол",

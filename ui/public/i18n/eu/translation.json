@@ -258,7 +258,8 @@
         "action_add_zone": "Domeinu bat gehitu da",
         "action_remove_zone": "Domeinu bat kendu da",
         "action_provision": "Erregistroak behin idatzi dira",
-        "dns_host": "DNS hornitzailea: {provider}"
+        "dns_host": "DNS hornitzailea: {provider}",
+        "action_update_zone": "Domeinu baten kredentzialak aldatu dira"
     },
     "host_record": {
         "title_ok": "Ostalari-izenak nodo honetara seinalatzen du",

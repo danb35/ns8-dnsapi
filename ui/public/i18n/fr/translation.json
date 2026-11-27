@@ -258,7 +258,8 @@
         "action_add_zone": "Domaine ajouté",
         "action_remove_zone": "Domaine supprimé",
         "action_provision": "Enregistrements écrits une fois",
-        "dns_host": "Hébergeur DNS {provider}"
+        "dns_host": "Hébergeur DNS {provider}",
+        "action_update_zone": "Identifiants d'un domaine modifiés"
     },
     "host_record": {
         "title_ok": "Le nom d'hôte pointe vers ce nœud",

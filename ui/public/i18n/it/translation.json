@@ -258,7 +258,8 @@
         "action_add_zone": "Dominio aggiunto",
         "action_remove_zone": "Dominio rimosso",
         "action_provision": "Record scritti una tantum",
-        "dns_host": "Host DNS {provider}"
+        "dns_host": "Host DNS {provider}",
+        "action_update_zone": "Credenziali di un dominio cambiate"
     },
     "host_record": {
         "title_ok": "Il nome host punta a questo nodo",

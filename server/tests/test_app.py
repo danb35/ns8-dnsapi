@@ -1091,6 +1091,7 @@ class BrokerTest(unittest.TestCase):
             ("dnshelper", "add-credential", {}),
             ("dnshelper", "add-zone", {}),
             ("dnshelper", "remove-zone", {}),
+            ("dnshelper", "update-zone", {}),
             ("dnshelper", "remove-credential", {}),
             ("self", "create-key", {"owner": "t00000001"}),
             ("self", "update-key", {"id": "abcdef12", "label": "x"}),
@@ -1101,7 +1102,6 @@ class BrokerTest(unittest.TestCase):
             ("dnshelper", "append-records", {"zone": "x"}),  # no on_behalf_of
             ("dnshelper", "set-policy", {"rules": []}),
             ("dnshelper", "update-credential", {}),
-            ("dnshelper", "update-zone", {}),
             ("dnshelper", "take-over-credential", {}),
             ("dnshelper", "get-configuration", {}),
             ("dnshelper", "configure-module", {}),

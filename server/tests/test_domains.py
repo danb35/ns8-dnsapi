@@ -59,6 +59,12 @@ class DelegateBackend(FakeBackend):
                 raise refused("zone_already_configured")
             self.zones[data["zone"]] = data["credential"]
             return {}
+        if agent_id == "dnshelper" and action == "update-zone":
+            self.calls.append((agent_id, action, data))
+            if data["zone"] not in self.zones or data["credential"] not in self.creds:
+                raise refused("not_permitted")
+            self.zones[data["zone"]] = data["credential"]
+            return {}
         if agent_id == "dnshelper" and action == "remove-zone":
             self.calls.append((agent_id, action, data))
             if data["zone"] not in self.zones:
@@ -235,6 +241,106 @@ class DomainTest(ApiTest):
             resp, body = self.request("DELETE", f"/v1/zones/{zone}", "operator")
             self.assertError(resp, body, 404, "zone_not_found")
         self.assertNotIn("remove-zone", self.actions())
+
+    # new credentials for a hosted zone
+
+    def hosted(self):
+        resp, body = self.request("POST", "/v1/zones", "operator", {
+            "zone": "customer.example", "provider": "cloudflare", "credentials": CREDS, "tenant": "t00000001"})
+        self.assertEqual(resp.status, 201, body)
+        self.backend.calls.clear()
+        return self.backend.zones["customer.example"]
+
+    def test_new_credentials_replace_the_old(self):
+        old = self.hosted()
+        resp, body = self.request("PATCH", "/v1/zones/customer.example", "operator",
+                                  {"credentials": {"api_token": "rotated-token-0123"}})
+        self.assertEqual(resp.status, 200, body)
+        self.assertEqual((body["provider"], body["tenant"], body["dry_run"]), ("cloudflare", "t00000001", False))
+        self.assertEqual(self.actions(), ["list-zones", "validate-zone", "list-zones", "add-credential",
+                                          "update-zone", "remove-credential"])
+        new = self.backend.zones["customer.example"]
+        self.assertNotEqual(new, old)
+        self.assertEqual(list(self.backend.creds), [new])
+        self.assertEqual(self.journal(), {})
+        self.assertIn("customer.example", self.api.store.tenant("t00000001")["zones"])
+        entry = self.activity()[-1]
+        self.assertEqual((entry["action"], entry["result"], entry["provider"]), ("update-zone", "ok", "cloudflare"))
+        self.assertNotIn("rotated-token", json.dumps(self.activity()))
+        # the tenant's key still reaches the zone
+        resp, body = self.request("GET", "/v1/zones/customer.example/records", "acme")
+        self.assertEqual(resp.status, 200, body)
+
+    def test_another_dns_host(self):
+        self.hosted()
+        resp, body = self.request("PATCH", "/v1/zones/customer.example", "operator",
+                                  {"provider": "rfc2136", "credentials": {"server": "ns.example"}})
+        self.assertEqual(resp.status, 200, body)
+        self.assertEqual(body["provider"], "rfc2136")
+        self.assertEqual(list(self.backend.creds.values()), ["rfc2136"])
+
+    def test_dry_run_and_bad_credentials_change_nothing(self):
+        old = self.hosted()
+        resp, body = self.request("PATCH", "/v1/zones/customer.example", "operator",
+                                  {"credentials": {"api_token": "rotated"}, "dry_run": True})
+        self.assertEqual((resp.status, body["valid"], body["dry_run"]), (200, True, True))
+        resp, body = self.request("PATCH", "/v1/zones/customer.example", "operator",
+                                  {"credentials": {"api_token": "bad"}})
+        self.assertError(resp, body, 502, "auth_failed")
+        self.assertEqual((self.backend.zones["customer.example"], list(self.backend.creds)), (old, [old]))
+        self.assertNotIn("add-credential", self.actions())
+        self.assertEqual([e["result"] for e in self.activity()[-2:]], ["dry-run", "failed:auth_failed"])
+
+    def test_a_failed_switch_keeps_the_old_credential(self):
+        old = self.hosted()
+        self.backend.refuse["update-zone"] = refused("not_permitted")
+        resp, body = self.request("PATCH", "/v1/zones/customer.example", "operator",
+                                  {"credentials": {"api_token": "rotated"}})
+        self.assertError(resp, body, 403, "not_permitted")
+        self.assertEqual((self.backend.zones["customer.example"], list(self.backend.creds)), (old, [old]))
+        self.assertEqual(self.journal(), {})
+
+    def test_patch_refusals(self):
+        self.hosted()
+        for path, key, data, status, code in [
+                ("/v1/zones/acme.test", "operator", {"credentials": CREDS}, 404, "zone_not_found"),
+                ("/v1/zones/customer.example", "acme", {"credentials": CREDS}, 404, "not_found"),
+                ("/v1/zones/customer.example", "op_acme", {"credentials": CREDS}, 403, "restricted_key"),
+                ("/v1/zones/customer.example", "operator", {"tenant": "t00000002"}, 400, "not_editable"),
+                ("/v1/zones/customer.example", "operator", {}, 400, "invalid_request"),
+                ("/v1/zones/customer.example", "operator", {"credentials": {"nope": "x"}}, 400, "unknown_field")]:
+            resp, body = self.request("PATCH", path, key, data)
+            self.assertError(resp, body, status, code)
+        self.assertNotIn("add-credential", self.actions())
+
+    def test_a_concurrent_change_is_409(self):
+        self.hosted()
+        lock = self.api.zone_change_locks.setdefault("customer.example", __import__("threading").Lock())
+        lock.acquire()
+        try:
+            resp, body = self.request("PATCH", "/v1/zones/customer.example", "operator", {"credentials": CREDS})
+            self.assertError(resp, body, 409, "change_in_progress")
+        finally:
+            lock.release()
+
+    def test_clean_up_after_a_stop_during_a_credential_change(self):
+        """Whichever of the two credentials the zone does not use is removed; never a zone."""
+        old = self.hosted()
+        self.backend.creds["c000000ee"] = "cloudflare"
+        # stopped before update-zone: the zone still uses the old one
+        self.api.store.provisioning_set("before", {"zone": "customer.example", "kind": "credentials",
+                                                   "credentials": ["c000000ee", old]})
+        self.api.cleanup_provisioning()
+        self.assertEqual((self.backend.zones, list(self.backend.creds), self.journal()),
+                         ({"customer.example": old}, [old], {}))
+        # stopped after update-zone: the zone uses the new one
+        self.backend.creds["c000000ff"] = "cloudflare"
+        self.backend.zones["customer.example"] = "c000000ff"
+        self.api.store.provisioning_set("after", {"zone": "customer.example", "kind": "credentials",
+                                                  "credentials": ["c000000ff", old]})
+        self.api.cleanup_provisioning()
+        self.assertEqual((self.backend.zones, list(self.backend.creds), self.journal()),
+                         ({"customer.example": "c000000ff"}, ["c000000ff"], {}))
 
     # one-shot
 

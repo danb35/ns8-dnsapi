@@ -267,7 +267,9 @@ dnsapi can then add zones and credentials of its own, and change every record of
 without an access rule. It cannot touch your own zones and credentials, nor add a zone dnshelper
 already manages or one inside or around yours. In dnshelper, its zones and credentials are tagged
 **Delegated to dnsapi1**; on the Tenants page here, such a zone is tagged **Added through the
-API**. Removing a tenant keeps its added zones, unassigned, until the portal removes them.
+API**. Removing a tenant keeps its added zones, unassigned, until the portal removes them. When a
+customer's token changes, the portal sends the new one, and dnsapi replaces the stored
+credential after checking it.
 
 Turn this on only if you accept that dnshelper then holds your customers' credentials: for as
 long as their domain is kept, and briefly for records written once. Many DNS hosts' credentials

@@ -92,7 +92,7 @@ are `{"error": {"code", "message", "field"}}`:
 | 403 | `insufficient_scope`, `tenant_disabled`, `address_not_allowed`, `restricted_key`, `outside_restriction`, `reserved_name` (the API's own host name and its `_acme-challenge`), `https_required` (the request came over plain HTTP); dnshelper's `not_permitted`, `forbidden` (apex NS, SOA) |
 | 404 | `not_found`, `zone_not_found`, `tenant_not_found`, `key_not_found` |
 | 405 | `method_not_allowed` |
-| 409 | `stale` (a record to remove is gone), `conflict` (e.g. a CNAME beside other records), `zone_assigned` (another tenant has the zone), `zone_not_assignable` (dnshelper does not let dnsapi write in it), `zone_already_configured` (dnshelper manages the domain already), `zone_overlaps` (it is inside or around a zone dnsapi did not add) |
+| 409 | `change_in_progress` (another request is changing the zone's credentials), `stale` (a record to remove is gone), `conflict` (e.g. a CNAME beside other records), `zone_assigned` (another tenant has the zone), `zone_not_assignable` (dnshelper does not let dnsapi write in it), `zone_already_configured` (dnshelper manages the domain already), `zone_overlaps` (it is inside or around a zone dnsapi did not add) |
 | 413 | `body_too_large` |
 | 429 | `rate_limited`, `too_many_concurrent` (more than 4 requests of one key at once), with `Retry-After` |
 | 502 | `upstream_error` (the DNS host failed), dnshelper's `auth_failed` (the DNS host refused its credentials), `cleanup_failed` (one-shot: the credentials are still in dnshelper and will be removed by a later clean-up) |
@@ -107,6 +107,7 @@ key cannot be used to find out which zones are managed.
 | `GET /v1/status` | none | liveness only |
 | `GET /v1/zones` | any | `{"zones": [{"zone", "provider", "full", "tenant", "hosted"}]}`: the key's zones (operator: every assignable zone; `tenant` and `hosted` only for operator keys) |
 | `POST /v1/zones` `{"zone", "provider", "credentials", "tenant", "dry_run"}` | operator | add a customer's domain with its DNS host and credentials, kept in dnshelper; see [Domains added through the API](#domains-added-through-the-api) |
+| `PATCH /v1/zones/{zone}` `{"credentials", "provider", "dry_run"}` | operator | new credentials for a domain added with `POST /v1/zones` |
 | `DELETE /v1/zones/{zone}` | operator | remove a domain added with `POST /v1/zones` |
 | `POST /v1/zones/provision` `{"zone", "provider", "credentials", "records", "dry_run"}` | operator | write records into a customer's domain without keeping its credentials |
 | `GET /v1/zones/{zone}/records?name=&type=` | any | the records; those another module wrote carry `owned_by` |
@@ -175,6 +176,11 @@ Operator keys without `restrict` only; a tenant key gets 404.
   `dry_run` only checks the credentials. Answers 201 `{"zone", "provider", "tenant", "full",
   "hosted", "dry_run"}`. `DELETE /v1/zones/{zone}` removes it (and its credentials) from
   dnshelper again; the records stay at the DNS host. A zone not added this way is 404.
+- **New credentials**, `PATCH /v1/zones/{zone}` `{"credentials", "provider", "dry_run"}`: when the
+  customer's token expires or is rotated, or the domain moves to another DNS host (`provider`,
+  the zone's own when left out). Send every credential field, not only the changed ones. dnsapi
+  checks them at the DNS host before storing them; the zone keeps its records, tenant and
+  history. 409 `change_in_progress` while another request changes the same zone's credentials.
 - **One-shot**, `POST /v1/zones/provision`: for a domain that only needs some records written,
   such as for transactional mail. dnsapi adds the credentials and the zone, writes `records` (at
   most 100, as `POST .../records` does), and removes both again, whatever happened. Answers 200
@@ -238,7 +244,8 @@ for whichever customer is logged in. The administrator gives it the key and the 
   change to the portal.
 - **Customer adds a domain at their own DNS host**: ask for the fields `GET /v1/providers` lists,
   then `POST /v1/zones` with `tenant` (a `dry_run` first checks the credentials). For records
-  written once, `POST /v1/zones/provision` instead. See [Domains added through the
+  written once, `POST /v1/zones/provision` instead. When the customer gives you a new token, send
+  it with `PATCH /v1/zones/{zone}`. See [Domains added through the
   API](#domains-added-through-the-api).
 - **Customer scripts their own DNS**: `POST /v1/tenants/{id}/keys` makes a tenant key; show it
   once. Change its label, allowed addresses or expiry with `PATCH .../keys/{key id}`; revoke it

@@ -596,6 +596,29 @@ Check the refusals when adding a domain
     ${delegated} =    Evaluate    [c['name'] for c in $config['credentials'] if c['delegated_to']]
     Should Be Equal    ${delegated}    ${{ ['dnsapi: ' + $ZONE_HOSTED] }}
 
+Check that an added domain gets new credentials
+    ${config} =    Run action    ${dnshelper_id}    get-configuration
+    ${before} =    Evaluate    [z['credential'] for z in $config['zones'] if z['zone'] == $ZONE_HOSTED][0]
+    Expect API    502    PATCH    /v1/zones/${ZONE_HOSTED}    ${OPERATOR_KEY}
+    ...    {"credentials": {"api_url": "${PDNS_API}", "api_key": "wrong"}}
+    ...    code=auth_failed
+    ${body} =    Expect API    200    PATCH    /v1/zones/${ZONE_HOSTED}    ${OPERATOR_KEY}
+    ...    {"credentials": ${PDNS_CREDENTIALS}, "dry_run": true}
+    Should Be True    ${body}[valid]
+    ${body} =    Expect API    200    PATCH    /v1/zones/${ZONE_HOSTED}    ${OPERATOR_KEY}
+    ...    {"credentials": ${PDNS_CREDENTIALS}}
+    Should Be Equal    ${body}[tenant]    ${TENANT_A}
+    ${config} =    Run action    ${dnshelper_id}    get-configuration
+    ${after} =    Evaluate    [z['credential'] for z in $config['zones'] if z['zone'] == $ZONE_HOSTED][0]
+    Should Not Be Equal    ${after}    ${before}
+    # the old credential is gone, the new one is dnsapi's, and the tenant still writes
+    ${delegated} =    Evaluate    [c['id'] for c in $config['credentials'] if c['delegated_to']]
+    Should Be Equal    ${delegated}    ${{ [$after] }}
+    Expect API    200    POST    /v1/zones/${ZONE_HOSTED}/records    ${KEY_A}    {"records": [{"name": "www2", "type": "A", "data": "192.0.2.41"}]}
+    ${values} =    PowerDNS values    ${ZONE_HOSTED}    www2.${ZONE_HOSTED}    A
+    Should Be Equal    ${values}    ${{ ['192.0.2.41'] }}
+    Expect API    404    PATCH    /v1/zones/${ZONE_A}    ${OPERATOR_KEY}    {"credentials": ${PDNS_CREDENTIALS}}    code=zone_not_found
+
 Check that an added domain can be removed
     Expect API    204    DELETE    /v1/zones/${ZONE_HOSTED}    ${OPERATOR_KEY}
     ${config} =    Run action    ${dnshelper_id}    get-configuration

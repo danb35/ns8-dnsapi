@@ -141,7 +141,7 @@ all of this through the API with an operator key.
 
 ![The Tenants page](images/tenants.png)
 
-![Editing a tenant: its zones, one of them with the ACME preset only ("Some records")](images/tenant-edit.png)
+![Editing a tenant: its zones, one with the ACME preset only ("Some records"), and one the portal added through the API](images/tenant-edit.png)
 
 From the command line:
 

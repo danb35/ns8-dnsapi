@@ -125,7 +125,8 @@
         "unavailable_title": "O dnshelper não está disponível",
         "unavailable_dnshelper_missing": "O dnshelper não está instalado. O dnsapi só altera registos DNS através do dnshelper.",
         "unavailable_dnshelper_too_old": "O dnshelper é anterior à 0.7.0 e não indica que zonas o dnsapi pode usar. Atualize-o.",
-        "unavailable_unavailable": "O dnshelper não respondeu. Tente mais tarde."
+        "unavailable_unavailable": "O dnshelper não respondeu. Tente mais tarde.",
+        "hosted": "Adicionada através da API"
     },
     "tenants": {
         "title": "Inquilinos",

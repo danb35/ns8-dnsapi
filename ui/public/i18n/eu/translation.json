@@ -125,7 +125,8 @@
         "unavailable_title": "dnshelper ez dago erabilgarri",
         "unavailable_dnshelper_missing": "dnshelper ez dago instalatuta. dnsapi-k dnshelper bidez soilik aldatzen ditu DNS erregistroak.",
         "unavailable_dnshelper_too_old": "dnshelper 0.7.0 baino zaharragoa da eta ez du esaten dnsapi-k zein zona erabil ditzakeen. Eguneratu ezazu.",
-        "unavailable_unavailable": "dnshelper-ek ez du erantzun. Saiatu berriro geroago."
+        "unavailable_unavailable": "dnshelper-ek ez du erantzun. Saiatu berriro geroago.",
+        "hosted": "APIaren bidez gehitua"
     },
     "tenants": {
         "title": "Maizterrak",

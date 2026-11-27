@@ -65,6 +65,13 @@
             size="sm"
             class="zone-tag"
           />
+          <NsTag
+            v-if="option.hosted"
+            :label="$t('zones.hosted')"
+            kind="teal"
+            size="sm"
+            class="zone-tag"
+          />
         </div>
 
         <NsInlineNotification

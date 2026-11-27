@@ -256,6 +256,9 @@ def make_server(host, port, api, max_connections=MAX_CONNECTIONS):
     return Server((host, port), handler, max_connections)
 
 
+CLEANUP_INTERVAL = 300  # seconds between one-shot clean-ups
+
+
 def main(argv=None):
     import argparse
 
@@ -284,6 +287,19 @@ def main(argv=None):
             api.store.flush_usage()
 
     threading.Thread(target=flush_loop, daemon=True).start()
+
+    def cleanup_loop():
+        # What one-shot requests left in dnshelper if this process or the broker
+        # stopped before their own clean-up (DESIGN.md, Phase 2, One-shot).
+        while True:
+            try:
+                api.cleanup_provisioning()
+            except Exception:
+                log.exception("one-shot clean-up failed")
+            if stopping.wait(CLEANUP_INTERVAL):
+                return
+
+    threading.Thread(target=cleanup_loop, daemon=True).start()
 
     def stop(signum, frame):
         # shutdown() waits for serve_forever() to return, so it can't run in

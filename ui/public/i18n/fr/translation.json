@@ -125,7 +125,8 @@
         "unavailable_title": "dnshelper n'est pas disponible",
         "unavailable_dnshelper_missing": "dnshelper n'est pas installé. dnsapi ne modifie les enregistrements DNS que par dnshelper.",
         "unavailable_dnshelper_too_old": "dnshelper est antérieur à la version 0.7.0 et n'indique pas quelles zones dnsapi peut utiliser. Mettez-le à jour.",
-        "unavailable_unavailable": "dnshelper n'a pas répondu. Réessayez plus tard."
+        "unavailable_unavailable": "dnshelper n'a pas répondu. Réessayez plus tard.",
+        "hosted": "Ajoutée par l'API"
     },
     "tenants": {
         "title": "Locataires",

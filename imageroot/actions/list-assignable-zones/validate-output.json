@@ -66,6 +66,10 @@
                     "full": {
                         "type": "boolean",
                         "description": "dnsapi may write every record (a hosting customer's zone); false: only what dnshelper's rule allows, such as ACME challenges"
+                    },
+                    "hosted": {
+                        "type": "boolean",
+                        "description": "Whether the zone was added through the API (POST /v1/zones) with the customer's credentials"
                     }
                 }
             }

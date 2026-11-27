@@ -32,5 +32,5 @@ else:
         writable = {}
     tenants = state.tenants()
     result["zones"] = [{"zone": z, "provider": writable[z]["provider"], "full": writable[z]["full"],
-                        "tenant": state.zone_owner(tenants, z)} for z in sorted(writable)]
+                        "hosted": writable[z]["hosted"], "tenant": state.zone_owner(tenants, z)} for z in sorted(writable)]
 json.dump(result, fp=sys.stdout)

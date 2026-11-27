@@ -125,7 +125,8 @@
         "unavailable_title": "dnshelper கிடைக்கவில்லை",
         "unavailable_dnshelper_missing": "dnshelper நிறுவப்படவில்லை. dnsapi DNS பதிவுகளை dnshelper வழியாக மட்டுமே மாற்றுகிறது.",
         "unavailable_dnshelper_too_old": "dnshelper 0.7.0 ஐ விடப் பழையது, dnsapi எந்த மண்டலங்களைப் பயன்படுத்தலாம் என்று அது சொல்வதில்லை. அதைப் புதுப்பிக்கவும்.",
-        "unavailable_unavailable": "dnshelper பதிலளிக்கவில்லை. பின்னர் மீண்டும் முயலவும்."
+        "unavailable_unavailable": "dnshelper பதிலளிக்கவில்லை. பின்னர் மீண்டும் முயலவும்.",
+        "hosted": "API வழியாகச் சேர்க்கப்பட்டது"
     },
     "tenants": {
         "title": "குத்தகைதாரர்கள்",

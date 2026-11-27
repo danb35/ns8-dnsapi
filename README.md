@@ -36,8 +36,8 @@ DNS-01; the admin UI (Status, Tenants, Keys, Activity, Settings) and the OpenAPI
 node test; the API's host name published through dnshelper; and the hardening from a security
 review (the broker, HTTPS only, concurrency limits); editable keys; the provider list; and CI
 that tests against a real dnshelper. Phase 2, adding customers' domains through the API, is
-built on this branch: it needs dnshelper 0.8.0, which is not released yet, and has not been
-tried on a node. Hardening that was considered and not built is listed in DESIGN.md, "Further hardening".
+built on this branch and tested on a node: it needs dnshelper 0.8.0, which is not released
+yet. Hardening that was considered and not built is listed in DESIGN.md, "Further hardening".
 
 ## Install
 

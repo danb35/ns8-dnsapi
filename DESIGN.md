@@ -16,8 +16,8 @@ UI and the OpenAPI document; the full node test; the API host name in DNS; the h
 security review); steps 9 to 11 (editable keys, the provider list, CI with dnshelper) are done,
 and released as 0.1.0. dnshelper's side, phase 1, is released in dnshelper 0.7.0 (2026-11-21),
 which this module needs at least; `GET /v1/providers` needs dnshelper 0.7.1. Step 12, phase 2
-(domains added through the API), is built (2026-11-27) and needs dnshelper 0.8.0 (its branch
-`feat/delegated-zones`, not released yet); it has not been tried on a node.
+(domains added through the API), is built and tested on a node (2026-11-27), and needs
+dnshelper 0.8.0 (its branch `feat/delegated-zones`, not released yet).
 
 Origin: forum request, community.nethserver.org topic 28774, posts 32-37 (2026-11-18/20). The
 ACME DNS-01 use was added by the operator on 2026-11-21.
@@ -223,7 +223,7 @@ For dnsapi that means:
 - A delegated zone is assignable like any other: `list-zones` reports it with `access: "write"`,
   `full: true` and `delegated: true` (dnshelper's unit tests). `GET /v1/zones` gives operator
   keys `hosted` from `delegated`, and so does `list-assignable-zones` (the Tenants dialog tags
-  such a zone "Added through the API"). **VERIFY** on a node.
+  such a zone "Added through the API"). Seen on the test node (2026-11-27).
 
 ### Hosting
 
@@ -1039,8 +1039,8 @@ wraps the task events in one promise, as theirs do):
       and dnsapi finding dnshelper added and removed. Not covered: `propagation`, which asks a
       zone's public name servers.
 12. Phase 2 (see [Phase 2](#phase-2-domains-added-through-the-api)): dnshelper's
-    delegated zones first, then hosting, then one-shot on top. **Built** (2026-11-27), not yet
-    tried on a node:
+    delegated zones first, then hosting, then one-shot on top. **Built** and tested on a node
+    (2026-11-27):
     - dnshelper's side: its branch `feat/delegated-zones` (danb35/ns8-dnshelper#122), for 0.8.0.
     - Unit tests: 99. `tests/test_domains.py` covers adding a hosted zone for a tenant, the dry
       run, bad credentials (nothing stored), a zone already managed or overlapping (the
@@ -1054,8 +1054,37 @@ wraps the task events in one promise, as theirs do):
     - The Robot suite runs on the pinned dnshelper 0.7.1: the phase 2 endpoints answer 503
       `not_granted`, and the rest of the suite shows the two-role grant still works there. Raise
       `DNSHELPER_IMAGE` to 0.8.0 once it is released, and add the phase 2 cases.
-    - Not done: a node test with dnshelper's branch image, the user guide's screenshots of the
-      tag.
+    - Tested on the test node (2026-11-27, node 3, Rocky 9, ns8-traefik 4.2.5): `dnshelper4`
+      updated to dnshelper's branch image (`feat-delegated-zones`) and `dnsapi4` to this branch's,
+      both with `update-module`. The update granted `dnswriter,dnszoneadmin` on `dnshelper4`, and
+      the api-server honoured both roles. Through Traefik, against a throwaway PowerDNS on the
+      node's loopback (fake zones, a throwaway API key), 54 of 55 checks passed:
+      - before `dnsapi4` was in dnshelper's `delegates`, 403 `not_permitted`; listed, a dry run
+        200 that stored nothing; a wrong API key 502 `auth_failed`; an unknown field 400;
+      - a hosted zone added for a new tenant (201): dnshelper showed the zone and the credential
+        delegated to `module/dnsapi4`, the secret not shown, its policy unchanged; `GET /v1/zones`
+        and `list-assignable-zones` reported it `hosted`; the tenant's key listed only it, added
+        and edited a record (seen at PowerDNS) and read it back; dnshelper's history named the
+        tenant and key;
+      - `2v6.in` (the administrator's) 409 `zone_already_configured`, `shop.example.com` inside
+        the administrator's `example.com` 409 `zone_overlaps`, neither leaving a credential; a
+        tenant key 404; `DELETE` of the administrator's zone 404; dnshelper refused the
+        administrator's `update-zone` on the delegated zone (`delegated`);
+      - `DELETE` (204) removed the zone and its credential from dnshelper and unassigned it, the
+        records stayed at PowerDNS, and the tenant key then got 404;
+      - after dnshelper's `take-over-credential`, `DELETE` was 404 and the zone no longer
+        `hosted`. The one failed check expected it to drop out of `GET /v1/zones` too; it stayed,
+        because `dnshelper4` has a rule for `module/dnsapi*` on every zone, which is the designed
+        behaviour after a take-over (the test's expectation was wrong);
+      - one-shot: a dry run wrote nothing; the real request wrote the TXT record (seen at
+        PowerDNS) and left no zone, credential or journal entry; into `2v6.in`, 409 and the zone
+        untouched;
+      - the PowerDNS API key appeared nowhere in dnsapi's state, the journal or NS8's task records
+        in Redis;
+      - `delegates` emptied again: 403. Removed afterwards: the PowerDNS container, the test
+        zones, the tenant; the operator key revoked. Both modules were left on the branch images.
+    - Not done: the clean-up after a real crash (unit tests only), and the user guide's
+      screenshots of the tag.
 
     Then phase 3 (PowerDNS hosting), as needed.
 

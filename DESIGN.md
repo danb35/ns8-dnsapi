@@ -17,7 +17,7 @@ security review); steps 9 to 11 (editable keys, the provider list, CI with dnshe
 and released as 0.1.0. dnshelper's side, phase 1, is released in dnshelper 0.7.0 (2026-11-21),
 which this module needs at least; `GET /v1/providers` needs dnshelper 0.7.1. Step 12, phase 2
 (domains added through the API), is built and tested on a node (2026-11-27), and needs
-dnshelper 0.8.0 (its branch `feat/delegated-zones`, not released yet).
+dnshelper 0.8.0 (released 2026-11-27).
 
 Origin: forum request, community.nethserver.org topic 28774, posts 32-37 (2026-11-18/20). The
 ACME DNS-01 use was added by the operator on 2026-11-21.
@@ -1026,7 +1026,7 @@ wraps the task events in one promise, as theirs do):
     "dnshelper is not available", and the node tests above were by hand). The robot suite installs
     dnshelper partway through, after the cases that check dnsapi without it.
     - dnshelper is a pinned release (`DNSHELPER_IMAGE`, 0.7.1, the first with `list-providers`
-      for modules), not `latest`, so a change on dnshelper's master cannot fail dnsapi's CI. It is
+      for modules; 0.8.0 since phase 2), not `latest`, so a change on dnshelper's master cannot fail dnsapi's CI. It is
       raised by hand when dnsapi needs more.
     - Its DNS host is a throwaway PowerDNS on the node's loopback, as in dnshelper's own suite,
       with four zones: the "API module (all records)" rule on two, the ACME preset on one, no
@@ -1041,7 +1041,7 @@ wraps the task events in one promise, as theirs do):
 12. Phase 2 (see [Phase 2](#phase-2-domains-added-through-the-api)): dnshelper's
     delegated zones first, then hosting, then one-shot on top. **Built** and tested on a node
     (2026-11-27):
-    - dnshelper's side: its branch `feat/delegated-zones` (danb35/ns8-dnshelper#122), for 0.8.0.
+    - dnshelper's side: danb35/ns8-dnshelper#122, released in dnshelper 0.8.0 (2026-11-27).
     - Unit tests: 99. `tests/test_domains.py` covers adding a hosted zone for a tenant, the dry
       run, bad credentials (nothing stored), a zone already managed or overlapping (the
       credential removed again), a failed assignment (the zone removed again), dnsapi not a
@@ -1051,9 +1051,15 @@ wraps the task events in one promise, as theirs do):
       and while dnshelper is away. No credential value is written to `state/usage/`. The broker
       passes the six delegate actions and still refuses `update-credential`, `update-zone`,
       `take-over-credential` and dnshelper's admin actions.
-    - The Robot suite runs on the pinned dnshelper 0.7.1: the phase 2 endpoints answer 503
-      `not_granted`, and the rest of the suite shows the two-role grant still works there. Raise
-      `DNSHELPER_IMAGE` to 0.8.0 once it is released, and add the phase 2 cases.
+    - The Robot suite: on the pinned dnshelper 0.7.1 (the PR's first runs), the phase 2
+      endpoints answered 503 `not_granted` and the rest of the suite passed, so the two-role grant
+      works with a dnshelper that has no `dnszoneadmin`. Then `DNSHELPER_IMAGE` was raised to
+      0.8.0 and the phase 2 cases added: 403 until dnsapi is in `delegates`; a hosted zone (dry
+      run, wrong credentials 502, added for a tenant, `delegated_to` in dnshelper, `hosted` in
+      `GET /v1/zones`, the tenant's key writing with no rule); `zone_already_configured` and
+      `zone_overlaps` with no credential left; `DELETE`; one-shot, with nothing left in
+      dnshelper, an empty journal and no credential in dnsapi's state; 403 again once
+      `delegates` is empty.
     - Tested on the test node (2026-11-27, node 3, Rocky 9, ns8-traefik 4.2.5): `dnshelper4`
       updated to dnshelper's branch image (`feat-delegated-zones`) and `dnsapi4` to this branch's,
       both with `update-module`. The update granted `dnswriter,dnszoneadmin` on `dnshelper4`, and

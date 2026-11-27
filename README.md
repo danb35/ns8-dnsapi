@@ -36,8 +36,7 @@ DNS-01; the admin UI (Status, Tenants, Keys, Activity, Settings) and the OpenAPI
 node test; the API's host name published through dnshelper; and the hardening from a security
 review (the broker, HTTPS only, concurrency limits); editable keys; the provider list; and CI
 that tests against a real dnshelper. Phase 2, adding customers' domains through the API, is
-built on this branch and tested on a node: it needs dnshelper 0.8.0, which is not released
-yet. Hardening that was considered and not built is listed in DESIGN.md, "Further hardening".
+built on this branch and tested on a node: it needs dnshelper 0.8.0 or later. Hardening that was considered and not built is listed in DESIGN.md, "Further hardening".
 
 ## Install
 
@@ -354,13 +353,19 @@ parts:
   is missing.
 - **With dnshelper**, installed partway through (a pinned release, `DNSHELPER_IMAGE`), with a
   throwaway PowerDNS on the node's loopback as its DNS host and four test zones: one rule for
-  every record on two of them, the ACME preset on one, none on the last. It covers:
+  every record on two of them, the ACME preset on one, none on the last. Three more zones exist
+  only at that PowerDNS, for the domains added through the API. It covers:
   - dnsapi finding dnshelper, the provider list, the host record published and found again;
   - assignable zones, two tenants that cannot reach each other's zones, the zone with no rule;
   - every write endpoint, checked against what PowerDNS holds, with `stale`, `conflict` and the
     apex NS refused, and `on_behalf_of` in dnshelper's audit line;
   - the reserved host name, `owned_by` and its warning, ACME `present` and `cleanup` with
     Basic authentication, and both limits on ACME records (the key's and dnshelper's rule);
+  - domains added through the API: refused until dnsapi is one of dnshelper's delegates, then a
+    hosted zone added for a tenant (a dry run, wrong credentials refused), written to by the
+    tenant's key without a rule, refused when dnshelper manages it already or when it sits
+    inside another zone, and removed; one-shot records with nothing left in dnshelper and no
+    credential in dnsapi's state; refused again once dnsapi is out of the delegates;
   - a zone dnshelper drops, tenants removed with their keys, and dnshelper removed.
 
   The propagation check is not covered: it asks a zone's public name servers. Nothing in it

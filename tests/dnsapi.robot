@@ -9,7 +9,7 @@ ${module_id}    ${EMPTY}
 ${API_HOST}    api.hosting.example.test
 # Never a real service or credential: dnshelper talks only to a throwaway
 # PowerDNS on the node's loopback, as in dnshelper's own suite.
-${DNSHELPER_IMAGE}    ghcr.io/danb35/dnshelper:0.7.1
+${DNSHELPER_IMAGE}    ghcr.io/danb35/dnshelper:0.8.0
 ${PDNS_IMAGE}    docker.io/powerdns/pdns-auth-49:4.9.17
 ${PDNS_API}    http://127.0.0.1:18081
 ${PDNS_KEY}    ci-not-a-real-key
@@ -17,6 +17,11 @@ ${ZONE_A}    hosting.example.test
 ${ZONE_B}    other.example.test
 ${ZONE_ACME}    internal.example.test
 ${ZONE_DENIED}    denied.example.test
+# At the throwaway PowerDNS only: added to dnshelper through the API (phase 2).
+${ZONE_HOSTED}    customer-hosted.test
+${ZONE_ONESHOT}    customer-mail.test
+${ZONE_INSIDE}    shop.denied.example.test
+${PDNS_CREDENTIALS}    {"api_url": "http://127.0.0.1:18081", "api_key": "ci-not-a-real-key"}
 ${dnshelper_id}    ${EMPTY}
 
 *** Keywords ***
@@ -323,7 +328,7 @@ Start a PowerDNS server with the test zones
     ...    for i in $(seq 90); do curl -fsS -o /dev/null -H 'X-API-Key: ${PDNS_KEY}' ${PDNS_API}/api/v1/servers/localhost \&\& exit 0; sleep 1; done; exit 1
     ...    return_rc=True  return_stdout=False
     Should Be Equal As Integers    ${rc}  0    PowerDNS did not start
-    FOR    ${zone}    IN    ${ZONE_A}    ${ZONE_B}    ${ZONE_ACME}    ${ZONE_DENIED}
+    FOR    ${zone}    IN    ${ZONE_A}    ${ZONE_B}    ${ZONE_ACME}    ${ZONE_DENIED}    ${ZONE_HOSTED}    ${ZONE_ONESHOT}    ${ZONE_INSIDE}
         ${rc} =    Execute Command
         ...    curl -fsS -o /dev/null -H 'X-API-Key: ${PDNS_KEY}' -X POST -d '{"name":"${zone}.","kind":"Native","nameservers":["ns1.${zone}."],"soa_edit_api":"DEFAULT"}' ${PDNS_API}/api/v1/servers/localhost/zones
         ...    return_rc=True  return_stdout=False
@@ -365,16 +370,14 @@ Check that the providers come from dnshelper
     ${secret} =    Evaluate    {f['name']: f['secret'] for f in $pdns['fields']}
     Should Be True    ${secret}[api_key]
 
-Check that adding domains needs a dnshelper with delegates
-    # dnshelper 0.7.1 (DNSHELPER_IMAGE) has no dnszoneadmin role: the api-server refuses
-    # validate-zone, and the API says that dnshelper may need updating. The rest of the
-    # suite shows that the dnswriter half of the grant still works there.
-    Expect API    503    POST    /v1/zones    ${OPERATOR_KEY}
-    ...    {"zone": "customer.example", "provider": "cloudflare", "credentials": {"api_token": "ci-not-a-real-token"}, "dry_run": true}
-    ...    code=not_granted
-    Expect API    503    POST    /v1/zones/provision    ${OPERATOR_KEY}
-    ...    {"zone": "customer.example", "provider": "cloudflare", "credentials": {"api_token": "ci-not-a-real-token"}, "records": [{"name": "@", "type": "TXT", "data": "x"}], "dry_run": true}
-    ...    code=not_granted
+Check that adding domains is refused until dnsapi is a delegate
+    # dnshelper's delegates setting is empty by default: the role alone is not enough.
+    Expect API    403    POST    /v1/zones    ${OPERATOR_KEY}
+    ...    {"zone": "${ZONE_HOSTED}", "provider": "powerdns", "credentials": ${PDNS_CREDENTIALS}, "dry_run": true}
+    ...    code=not_permitted
+    Expect API    403    POST    /v1/zones/provision    ${OPERATOR_KEY}
+    ...    {"zone": "${ZONE_ONESHOT}", "provider": "powerdns", "credentials": ${PDNS_CREDENTIALS}, "records": [{"name": "@", "type": "TXT", "data": "x"}]}
+    ...    code=not_permitted
     Expect API    404    DELETE    /v1/zones/${ZONE_A}    ${OPERATOR_KEY}    code=zone_not_found
 
 Check that the host record is published in the managed zone
@@ -552,6 +555,82 @@ Check that the Status page counts the zones
     ${output} =    Execute Command    api-cli run module/${module_id}/list-assignable-zones
     Should Contain    ${output}    ${ZONE_A}
     Should Not Contain    ${output}    ${ZONE_DENIED}
+
+Check that dnsapi adds a domain once it is a delegate
+    Run action    ${dnshelper_id}    configure-module    {"delegates": ["${module_id}"]}
+    ${body} =    Expect API    200    POST    /v1/zones    ${OPERATOR_KEY}
+    ...    {"zone": "${ZONE_HOSTED}", "provider": "powerdns", "credentials": ${PDNS_CREDENTIALS}, "dry_run": true}
+    Should Be True    ${body}[valid]
+    Expect API    502    POST    /v1/zones    ${OPERATOR_KEY}
+    ...    {"zone": "${ZONE_HOSTED}", "provider": "powerdns", "credentials": {"api_url": "${PDNS_API}", "api_key": "wrong"}}
+    ...    code=auth_failed
+    ${body} =    Expect API    201    POST    /v1/zones    ${OPERATOR_KEY}
+    ...    {"zone": "${ZONE_HOSTED}", "provider": "powerdns", "credentials": ${PDNS_CREDENTIALS}, "tenant": "${TENANT_A}"}
+    Should Be True    ${body}[hosted]
+    ${config} =    Run action    ${dnshelper_id}    get-configuration
+    ${owner} =    Evaluate    {z['zone']: z['delegated_to'] for z in $config['zones']}
+    Should Be Equal    ${owner}[${ZONE_HOSTED}]    module/${module_id}
+    Should Be Equal    ${owner}[${ZONE_A}]    ${EMPTY}
+    Should Not Contain    ${{ json.dumps($config) }}    ${PDNS_KEY}
+    ${body} =    Expect API    200    GET    /v1/zones    ${OPERATOR_KEY}
+    ${hosted} =    Evaluate    {z['zone']: z['hosted'] for z in $body['zones']}
+    Should Be True    ${hosted}[${ZONE_HOSTED}]
+    Should Not Be True    ${hosted}[${ZONE_A}]
+    # the tenant's key manages it like its other zone, with no rule in dnshelper's policy
+    Expect API    200    POST    /v1/zones/${ZONE_HOSTED}/records    ${KEY_A}    {"records": [{"name": "www", "type": "A", "data": "192.0.2.40"}]}
+    ${values} =    PowerDNS values    ${ZONE_HOSTED}    www.${ZONE_HOSTED}    A
+    Should Be Equal    ${values}    ${{ ['192.0.2.40'] }}
+
+Check the refusals when adding a domain
+    Expect API    409    POST    /v1/zones    ${OPERATOR_KEY}
+    ...    {"zone": "${ZONE_A}", "provider": "powerdns", "credentials": ${PDNS_CREDENTIALS}}
+    ...    code=zone_already_configured
+    Expect API    409    POST    /v1/zones    ${OPERATOR_KEY}
+    ...    {"zone": "${ZONE_INSIDE}", "provider": "powerdns", "credentials": ${PDNS_CREDENTIALS}}
+    ...    code=zone_overlaps
+    Expect API    404    POST    /v1/zones    ${KEY_A}
+    ...    {"zone": "${ZONE_ONESHOT}", "provider": "powerdns", "credentials": ${PDNS_CREDENTIALS}}
+    ...    code=not_found
+    # a refused zone leaves no credential behind
+    ${config} =    Run action    ${dnshelper_id}    get-configuration
+    ${delegated} =    Evaluate    [c['name'] for c in $config['credentials'] if c['delegated_to']]
+    Should Be Equal    ${delegated}    ${{ ['dnsapi: ' + $ZONE_HOSTED] }}
+
+Check that an added domain can be removed
+    Expect API    204    DELETE    /v1/zones/${ZONE_HOSTED}    ${OPERATOR_KEY}
+    ${config} =    Run action    ${dnshelper_id}    get-configuration
+    ${zones} =    Evaluate    [z['zone'] for z in $config['zones']]
+    Should Not Contain    ${zones}    ${ZONE_HOSTED}
+    ${delegated} =    Evaluate    [c['id'] for c in $config['credentials'] if c['delegated_to']]
+    Should Be Empty    ${delegated}
+    Tenant has zones    ${TENANT_A}    ${ZONE_A}
+    Expect API    404    GET    /v1/zones/${ZONE_HOSTED}/records    ${KEY_A}    code=zone_not_found
+    # the records stay at the DNS host
+    ${values} =    PowerDNS values    ${ZONE_HOSTED}    www.${ZONE_HOSTED}    A
+    Should Be Equal    ${values}    ${{ ['192.0.2.40'] }}
+
+Check that a domain gets records once without keeping its credentials
+    ${body} =    Expect API    200    POST    /v1/zones/provision    ${OPERATOR_KEY}
+    ...    {"zone": "${ZONE_ONESHOT}", "provider": "powerdns", "credentials": ${PDNS_CREDENTIALS}, "records": [{"name": "@", "type": "TXT", "data": "v=spf1 include:mail.example.test -all"}]}
+    Should Not Be True    ${body}[dry_run]
+    ${values} =    PowerDNS values    ${ZONE_ONESHOT}    ${ZONE_ONESHOT}    TXT
+    Should Be Equal    ${values}    ${{ ['"v=spf1 include:mail.example.test -all"'] }}
+    ${config} =    Run action    ${dnshelper_id}    get-configuration
+    ${zones} =    Evaluate    [z['zone'] for z in $config['zones']]
+    Should Not Contain    ${zones}    ${ZONE_ONESHOT}
+    ${delegated} =    Evaluate    [c['id'] for c in $config['credentials'] if c['delegated_to']]
+    Should Be Empty    ${delegated}
+    ${journal} =    Execute Command    cat /home/${module_id}/.config/state/usage/provisioning.json
+    Should Be Equal    ${journal}    {}
+    ${rc} =    Execute Command    grep -rq '${PDNS_KEY}' /home/${module_id}/.config/state/
+    ...    return_rc=True  return_stdout=False
+    Should Not Be Equal As Integers    ${rc}  0    the DNS host's key was written to dnsapi's state
+
+Check that dnsapi stops adding domains when it is no longer a delegate
+    Run action    ${dnshelper_id}    configure-module    {"delegates": []}
+    Expect API    403    POST    /v1/zones    ${OPERATOR_KEY}
+    ...    {"zone": "${ZONE_HOSTED}", "provider": "powerdns", "credentials": ${PDNS_CREDENTIALS}, "dry_run": true}
+    ...    code=not_permitted
 
 Take screenshots of the pages
     # With dnshelper, two tenants with zones and their keys, so the pages show

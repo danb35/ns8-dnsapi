@@ -598,7 +598,7 @@ Check the refusals when adding a domain
 
 Check that an added domain gets new credentials
     ${config} =    Run action    ${dnshelper_id}    get-configuration
-    ${before} =    Evaluate    [z['credential'] for z in $config['zones'] if z['zone'] == $ZONE_HOSTED][0]
+    ${before} =    Evaluate    [z['credential'] for z in $config['zones'] if z['zone'] == '${ZONE_HOSTED}'][0]
     Expect API    502    PATCH    /v1/zones/${ZONE_HOSTED}    ${OPERATOR_KEY}
     ...    {"credentials": {"api_url": "${PDNS_API}", "api_key": "wrong"}}
     ...    code=auth_failed
@@ -609,7 +609,7 @@ Check that an added domain gets new credentials
     ...    {"credentials": ${PDNS_CREDENTIALS}}
     Should Be Equal    ${body}[tenant]    ${TENANT_A}
     ${config} =    Run action    ${dnshelper_id}    get-configuration
-    ${after} =    Evaluate    [z['credential'] for z in $config['zones'] if z['zone'] == $ZONE_HOSTED][0]
+    ${after} =    Evaluate    [z['credential'] for z in $config['zones'] if z['zone'] == '${ZONE_HOSTED}'][0]
     Should Not Be Equal    ${after}    ${before}
     # the old credential is gone, the new one is dnsapi's, and the tenant still writes
     ${delegated} =    Evaluate    [c['id'] for c in $config['credentials'] if c['delegated_to']]

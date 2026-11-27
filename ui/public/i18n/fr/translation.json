@@ -254,7 +254,11 @@
         "result_ok": "Fait",
         "result_dry_run": "Simulation",
         "result_rejected": "Refusé",
-        "result_failed": "Échec"
+        "result_failed": "Échec",
+        "action_add_zone": "Domaine ajouté",
+        "action_remove_zone": "Domaine supprimé",
+        "action_provision": "Enregistrements écrits une fois",
+        "dns_host": "Hébergeur DNS {provider}"
     },
     "host_record": {
         "title_ok": "Le nom d'hôte pointe vers ce nœud",

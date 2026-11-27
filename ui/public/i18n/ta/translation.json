@@ -254,7 +254,11 @@
         "result_ok": "முடிந்தது",
         "result_dry_run": "சோதனை ஓட்டம்",
         "result_rejected": "மறுக்கப்பட்டது",
-        "result_failed": "தோல்வியடைந்தது"
+        "result_failed": "தோல்வியடைந்தது",
+        "action_add_zone": "டொமைன் சேர்க்கப்பட்டது",
+        "action_remove_zone": "டொமைன் நீக்கப்பட்டது",
+        "action_provision": "பதிவுகள் ஒருமுறை எழுதப்பட்டன",
+        "dns_host": "DNS வழங்குநர் {provider}"
     },
     "host_record": {
         "title_ok": "ஹோஸ்ட் பெயர் இந்தக் கணுவைச் சுட்டுகிறது",

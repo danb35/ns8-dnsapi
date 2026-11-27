@@ -254,7 +254,11 @@
         "result_ok": "Eginda",
         "result_dry_run": "Proba",
         "result_rejected": "Baztertua",
-        "result_failed": "Huts egin du"
+        "result_failed": "Huts egin du",
+        "action_add_zone": "Domeinu bat gehitu da",
+        "action_remove_zone": "Domeinu bat kendu da",
+        "action_provision": "Erregistroak behin idatzi dira",
+        "dns_host": "DNS hornitzailea: {provider}"
     },
     "host_record": {
         "title_ok": "Ostalari-izenak nodo honetara seinalatzen du",

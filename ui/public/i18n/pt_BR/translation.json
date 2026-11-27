@@ -254,7 +254,11 @@
         "result_ok": "Feito",
         "result_dry_run": "Simulação",
         "result_rejected": "Recusado",
-        "result_failed": "Falhou"
+        "result_failed": "Falhou",
+        "action_add_zone": "Domínio adicionado",
+        "action_remove_zone": "Domínio removido",
+        "action_provision": "Registros gravados uma vez",
+        "dns_host": "Provedor de DNS {provider}"
     },
     "host_record": {
         "title_ok": "O nome de host aponta para este nó",

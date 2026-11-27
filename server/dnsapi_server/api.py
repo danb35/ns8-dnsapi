@@ -840,7 +840,7 @@ class Api:
         try:
             self.validate_credentials(req, zone, provider, fields)
             if dry_run:
-                self.audit(req, "add-zone", dry_run=True, **audit)
+                self.audit(req, "add-zone", result="dry-run", **audit)
                 return HTTPStatus.OK, {"zone": zone, "provider": provider, "tenant": tenant_id,
                                        "dry_run": True, "valid": True}
             cred = self.add_delegated(req, zone, provider, fields, f"dnsapi: {zone}")
@@ -923,9 +923,12 @@ class Api:
         outcome = "dry-run" if dry_run else "ok"
         if failure is not None:
             outcome = f"{'rejected' if failure.status < 500 else 'failed'}:{failure.code}"
+        extra = {}
         if not cleaned:
-            outcome += ",cleanup_failed"
-        self.audit(req, "provision", zone=zone, provider=provider, result=outcome)
+            # what the request itself came to, beside the clean-up that failed
+            extra["write_result"] = outcome
+            outcome = "failed:cleanup_failed"
+        self.audit(req, "provision", zone=zone, provider=provider, result=outcome, **extra)
         if not cleaned:
             what = (f"{failure.code}: {failure.message}; " if failure is not None else
                     ("the records were written; " if not dry_run else ""))

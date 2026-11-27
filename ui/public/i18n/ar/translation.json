@@ -254,7 +254,11 @@
         "result_ok": "تم",
         "result_dry_run": "تجربة",
         "result_rejected": "مرفوض",
-        "result_failed": "فشل"
+        "result_failed": "فشل",
+        "action_add_zone": "إضافة نطاق",
+        "action_remove_zone": "إزالة نطاق",
+        "action_provision": "كتابة سجلات لمرة واحدة",
+        "dns_host": "مزوّد DNS {provider}"
     },
     "host_record": {
         "title_ok": "اسم المضيف يشير إلى هذه العقدة",

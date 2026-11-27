@@ -35,9 +35,10 @@ DNSHELPER_READ = {"list-zones", "get-records", "list-owners", "check-propagation
 DNSHELPER_WRITE = {"append-records", "set-records", "delete-records", "apply-changes"}
 # As one of dnshelper's delegates (DESIGN.md, Phase 2): domains added through the API with
 # the customer's credentials. dnshelper limits them to dnsapi's own credentials and zones.
-# update-credential and update-zone are left out until there is a use for them.
+# update-zone points a hosted zone at new credentials; update-credential is left out
+# (dnsapi replaces a credential rather than changing it in place).
 DNSHELPER_DELEGATE = {"validate-zone", "list-provider-zones", "add-credential", "remove-credential",
-                      "add-zone", "remove-zone"}
+                      "add-zone", "update-zone", "remove-zone"}
 SELF_ACTIONS = {"add-tenant", "update-tenant", "remove-tenant", "assign-zone", "unassign-zone",
                 "create-key", "update-key", "revoke-key", "revoke-exposed-key"}
 

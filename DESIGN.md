@@ -135,6 +135,7 @@ and SOA read-only.
 | `POST/PATCH/DELETE /v1/tenants/{id}/keys[/{key id}]` | operator | none (`PATCH` changes only `label`, `allowlist`, `expires`) |
 | `POST /v1/acme/present`, `POST /v1/acme/cleanup` `{fqdn, value}` | write | `append-records`, `delete-records` of one `_acme-challenge` TXT record (see [ACME DNS-01 validation](#acme-dns-01-validation)) |
 | `POST /v1/zones` `{zone, provider, credentials, tenant, dry_run}` | operator | `validate-zone`, `add-credential`, `add-zone` (dnshelper 0.8.0; see [Phase 2](#phase-2-domains-added-through-the-api)) |
+| `PATCH /v1/zones/{zone}` `{credentials, provider, dry_run}` | operator | `validate-zone`, `add-credential`, `update-zone`, `remove-credential`: new credentials for a zone added with `POST /v1/zones` |
 | `DELETE /v1/zones/{zone}` | operator | `remove-zone`, `remove-credential`, for a zone added with `POST /v1/zones` |
 | `POST /v1/zones/provision` `{zone, provider, credentials, records, dry_run}` | operator | as `POST /v1/zones`, then `append-records`, then the removals |
 | `GET /v1/status` | none | none (liveness only, says nothing about zones) |
@@ -218,8 +219,9 @@ For dnsapi that means:
   `validate-zone`), as `GET /v1/providers` did with 0.7.0. dnsapi's minimum dnshelper stays
   0.7.0.
 - The broker's allowlist gains `add-credential`, `remove-credential`, `add-zone`, `remove-zone`,
-  `validate-zone` and `list-provider-zones`. `update-credential` and `update-zone` are left out
-  until a use for them appears.
+  `validate-zone` and `list-provider-zones`, and `update-zone` for new credentials (see [Changing a
+  hosted domain's credentials](#changing-a-hosted-domains-credentials)). `update-credential` stays
+  out: dnsapi replaces a credential rather than changing it in place.
 - A delegated zone is assignable like any other: `list-zones` reports it with `access: "write"`,
   `full: true` and `delegated: true` (dnshelper's unit tests). `GET /v1/zones` gives operator
   keys `hosted` from `delegated`, and so does `list-assignable-zones` (the Tenants dialog tags
@@ -259,6 +261,33 @@ For dnsapi that means:
   task records and audit log by name, and every secret field in dnshelper's provider list has a
   name that NS8 masks (checked 2026-11-25 against `core/agent/htask.go` and the api-server's
   `tasks.go`). Each step counts against the key's rate limit, as any dnshelper call does.
+
+### Changing a hosted domain's credentials
+
+Added 2026-11-27, after phase 2 was merged: the first design left `update-credential` and
+`update-zone` out "until a use appears", and one did. A customer's token expires or is rotated,
+or the domain moves to another DNS host; without this, the portal had to remove the domain and
+add it again, which drops its snapshot history in dnshelper.
+
+- `PATCH /v1/zones/{zone}` `{credentials, provider, dry_run}`, operator keys without `restrict`,
+  for a zone dnsapi added (404 otherwise, as for `DELETE`). Any other field is 400
+  `not_editable`; the tenant is changed with the tenant endpoints.
+- **The whole set of fields**, not some of them: dnsapi cannot read the stored secrets back to
+  merge a partial change (dnshelper never returns them), and a merge would also defeat checking
+  the credentials before storing them. `provider` is the zone's own when left out.
+- **Replace, not change in place:** the new credentials are checked inline (`validate-zone`), added
+  as a new credential, the zone is pointed at it (`update-zone`, which dnshelper allows a delegate
+  for its own zone and credential), and the old one is removed. A refusal at any step leaves the
+  zone on its old credential. The zone keeps its records, tenant, snapshots and owner index.
+- **A stop in the middle** leaves at most one credential unused. The journal entry
+  (`kind: "credentials"`) names both, the new and the old; the clean-up tries to remove each,
+  and dnshelper refuses to remove the one the zone uses (`credential_in_use`), so whichever is
+  unused goes, wherever the stop happened, and no zone is touched. The request itself removes
+  only the one it knows is unused, so a normal change leaves no refusal in dnshelper's log.
+- **One change of a zone's credentials at a time** in the service (409 `change_in_progress`):
+  two at once could each switch the zone and leave the other's new credential unused.
+- The audit line and Activity entry are `update-zone`, with the zone, DNS host and tenant; never
+  the credentials. `dry_run` only checks the credentials.
 
 ### One-shot
 
@@ -593,7 +622,7 @@ manages. `configure-module` then publishes it itself, so that the Let's Encrypt 
     `{"unavailable"}`. It runs only an allowlist: on dnshelper, `list-zones`, `get-records`,
     `list-owners`, `check-propagation`, `list-providers`, the delegate actions of phase 2
     (`validate-zone`, `list-provider-zones`, `add-credential`, `remove-credential`, `add-zone`,
-    `remove-zone`), and the four writes (`append-records`, `set-records`,
+    `update-zone`, `remove-zone`), and the four writes (`append-records`, `set-records`,
     `delete-records`, `apply-changes`), which must carry `on_behalf_of`, so records written
     through the API never get dnsapi as their owner; on this module, `add-tenant`,
     `update-tenant`, `remove-tenant`, `assign-zone`, `unassign-zone`, `create-key` (never for the

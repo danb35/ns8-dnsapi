@@ -224,6 +224,7 @@ class Api:
         self.pool = concurrent.futures.ThreadPoolExecutor(max_workers=workers)
         self.provisioning = set()  # ids of one-shot entries a request of this process is working on
         self.provisioning_lock = threading.Lock()
+        self.zone_change_locks = {}  # zone -> lock: one credential change of a zone at a time
 
     # authentication
 
@@ -753,11 +754,11 @@ class Api:
                            field="zone")
         return zone.strip().lower().rstrip(".")
 
-    def credentials_param(self, req, body):
+    def credentials_param(self, req, body, default_provider=None):
         """The DNS host and the credential fields for it, checked against dnshelper's
         provider list: known names only, and the required ones present (dnshelper
         checks them again). The values are passed on, never kept or logged."""
-        provider = body.get("provider")
+        provider = body.get("provider", default_provider)
         if not isinstance(provider, str) or not provider:
             raise ApiError(HTTPStatus.BAD_REQUEST, "invalid_request", "provider is required", field="provider")
         info = next((p for p in self.providers(req) if p.get("name") == provider), None)
@@ -884,6 +885,92 @@ class Api:
         self.audit(req, "remove-zone", zone=zone, provider=entry.get("provider") or "", tenant=tenant_id or "")
         return HTTPStatus.NO_CONTENT, None
 
+    def update_hosted_zone(self, req):
+        """PATCH /v1/zones/{zone}: new credentials for a zone dnsapi added, for example when
+        the customer's token expires or is rotated, or the domain moves to another DNS host
+        (DESIGN.md, Phase 2, Changing a hosted domain's credentials). The whole set of
+        fields is given: dnsapi cannot read the stored secrets to merge them. The new
+        credentials are checked at the DNS host first, added as a new credential, the zone
+        is pointed at it (dnshelper's update-zone), and the old one is removed."""
+        self.require_operator(req)
+        self.require_write(req)
+        zone = self.zone_param(req)
+        body = self.body_object(req)
+        unknown = set(body) - {"provider", "credentials", "dry_run"}
+        if unknown:
+            name = sorted(unknown)[0]
+            raise ApiError(HTTPStatus.BAD_REQUEST, "not_editable", f"{name} cannot be changed here", field=name)
+        if "credentials" not in body:
+            raise ApiError(HTTPStatus.BAD_REQUEST, "invalid_request", "credentials is required", field="credentials")
+        entry = self.hosted_entry(req, zone)
+        if entry is None:
+            raise ApiError(HTTPStatus.NOT_FOUND, "zone_not_found", "No zone added through the API by that name")
+        provider, fields = self.credentials_param(req, body, entry.get("provider"))
+        dry_run = self.dry_run_param(body)
+        tenant_id = self.store.zone_tenant(zone)
+        audit = {"zone": zone, "provider": provider, "tenant": tenant_id or ""}
+        try:
+            self.validate_credentials(req, zone, provider, fields)
+        except ApiError as exc:
+            self.audit(req, "update-zone", result=f"{'rejected' if exc.status < 500 else 'failed'}:{exc.code}",
+                       **audit)
+            raise
+        if dry_run:
+            self.audit(req, "update-zone", result="dry-run", **audit)
+            return HTTPStatus.OK, {"zone": zone, "provider": provider, "tenant": tenant_id, "dry_run": True,
+                                   "valid": True}
+        with self.provisioning_lock:
+            lock = self.zone_change_locks.setdefault(zone, threading.Lock())
+        if not lock.acquire(blocking=False):
+            raise ApiError(HTTPStatus.CONFLICT, "change_in_progress",
+                           "The credentials of this zone are being changed by another request")
+        try:
+            return self.replace_credentials(req, zone, provider, fields, tenant_id, audit)
+        finally:
+            lock.release()
+
+    def replace_credentials(self, req, zone, provider, fields, tenant_id, audit):
+        # read again under the lock: another request may have replaced it meanwhile
+        entry = self.hosted_entry(req, zone)
+        if entry is None:
+            raise ApiError(HTTPStatus.NOT_FOUND, "zone_not_found", "No zone added through the API by that name")
+        old = entry["credential"]
+        # Both credentials are journalled: whichever the zone does not use after a stop is
+        # removed by the clean-up, and dnshelper refuses to remove the one it uses.
+        entry_id = secrets.token_hex(8)
+        with self.provisioning_lock:
+            self.provisioning.add(entry_id)
+        journal = {"zone": zone, "kind": "credentials", "credentials": [old]}
+        self.store.provisioning_set(entry_id, journal)
+        new, switched = None, False
+        try:
+            self.charge(req, 2)
+            new = self.dnshelper(req, "add-credential",
+                                 {"name": f"dnsapi: {zone}", "provider": provider, "fields": fields})["id"]
+            journal["credentials"] = [new, old]
+            self.store.provisioning_set(entry_id, journal)
+            try:
+                self.dnshelper(req, "update-zone", {"zone": zone, "credential": new})
+                switched = True
+            except ApiError as exc:
+                self.audit(req, "update-zone",
+                           result=f"{'rejected' if exc.status < 500 else 'failed'}:{exc.code}", **audit)
+                raise
+            finally:
+                self.forget_zones()
+        finally:
+            # the unused one goes: the old after the switch, the new if it failed (the journal
+            # keeps both only for a clean-up after a stop, which cannot know which)
+            unused = [old] if switched else ([new] if new else [])
+            if not self.cleanup_credentials(entry_id, {"credentials": unused}):
+                log.warning("credential %s of %s was left in dnshelper; a later clean-up removes it",
+                            unused[0], zone)
+            with self.provisioning_lock:
+                self.provisioning.discard(entry_id)
+        self.audit(req, "update-zone", **audit)
+        return HTTPStatus.OK, {"zone": zone, "provider": provider, "tenant": tenant_id, "full": True,
+                               "hosted": True, "dry_run": False}
+
     def provision(self, req):
         """POST /v1/zones/provision: write records into a customer's domain with
         credentials that are not kept (DESIGN.md, Phase 2, One-shot). The credential
@@ -941,6 +1028,8 @@ class Api:
         """Remove a one-shot zone and credential from dnshelper, then the journal entry.
         The zone is removed only if dnshelper has it with this entry's credential: a zone
         that was there already (zone_already_configured) is not this request's."""
+        if entry.get("kind") == "credentials":
+            return self.cleanup_credentials(entry_id, entry)
         cred = entry.get("credential")
         ok = True
         if cred:
@@ -960,6 +1049,21 @@ class Api:
                         log.error("one-shot clean-up: remove-credential %s failed: %s", cred, exc.code)
                         ok = False
             self.forget_zones()
+        if ok:
+            self.store.provisioning_drop(entry_id)
+        return ok
+
+    def cleanup_credentials(self, entry_id, entry):
+        """Remove the credentials of an entry that no zone uses: dnshelper refuses one that a
+        zone still uses (credential_in_use), which is then kept. No zone is touched."""
+        ok = True
+        for cred in entry.get("credentials") or []:
+            try:
+                self.run_task("dnshelper", "remove-credential", {"id": cred})
+            except ApiError as exc:
+                if exc.code not in ("credential_not_found", "credential_in_use"):
+                    log.error("credential clean-up: remove-credential %s failed: %s", cred, exc.code)
+                    ok = False
         if ok:
             self.store.provisioning_drop(entry_id)
         return ok
@@ -1161,7 +1265,7 @@ TENANT = r"(?P<tenant>[^/]+)"
 ROUTES = [
     (r"/v1/zones", {"GET": "list_zones", "POST": "add_hosted_zone"}),
     (r"/v1/zones/provision", {"POST": "provision"}),
-    (rf"/v1/zones/{ZONE}", {"DELETE": "remove_hosted_zone"}),
+    (rf"/v1/zones/{ZONE}", {"PATCH": "update_hosted_zone", "DELETE": "remove_hosted_zone"}),
     (rf"/v1/zones/{ZONE}/records", {"GET": "get_records", "POST": "append_records", "DELETE": "delete_records"}),
     (rf"/v1/zones/{ZONE}/changes", {"POST": "apply_changes"}),
     (rf"/v1/zones/{ZONE}/rrsets", {"PUT": "set_rrsets"}),

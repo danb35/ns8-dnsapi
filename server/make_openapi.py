@@ -86,6 +86,10 @@ doc = {
             "responses": {**ok("#/components/schemas/ProvisionResult"), **errors(400, 401, 403, 409, 413, 429, 502, 503, 504)}}},
         "/v1/zones/{zone}": {
             "parameters": [ZONE_P],
+            "patch": {"summary": "New credentials for a domain added with POST /v1/zones",
+                      "description": "Operator keys without restrict only. For a customer whose token expired or was rotated, or a domain that moved to another DNS host (provider; it stays the same when left out). Give the whole set of credential fields: the stored ones cannot be read back to merge. dnsapi checks the new credentials at the DNS host, adds them, points the zone at them and removes the old ones; the zone's records, tenant and history are kept. dry_run only checks them. 404 for a zone not added through the API; 409 change_in_progress while another request changes the same zone's credentials.",
+                      "tags": ["domains (operator)"], "requestBody": body("#/components/schemas/CredentialsUpdate"),
+                      "responses": {**ok("#/components/schemas/HostedZone"), **errors(400, 401, 403, 404, 409, 429, 502, 503, 504)}},
             "delete": {"summary": "Remove a domain added with POST /v1/zones",
                        "description": "Operator keys without restrict only. dnshelper forgets the zone and its credentials, and the zone is unassigned from its tenant. The records stay at the DNS host. 404 for a zone that was not added through the API, or that the administrator has taken over since.",
                        "tags": ["domains (operator)"],
@@ -192,7 +196,7 @@ doc = {
         "schemas": {
             "Error": {"type": "object", "required": ["error"], "properties": {"error": {
                 "type": "object", "required": ["code", "message", "field"],
-                "properties": {"code": {"type": "string", "description": "invalid_request, not_editable, invalid_json, missing_key, invalid_key, key_expired, key_revoked, insufficient_scope, tenant_disabled, address_not_allowed, restricted_key, outside_restriction, not_found, zone_not_found, tenant_not_found, key_not_found, stale, conflict, zone_assigned, zone_not_assignable, zone_already_configured, zone_overlaps, unknown_provider, unknown_field, required, invalid_zone, cleanup_failed, reserved_name, https_required, body_too_large, rate_limited, too_many_concurrent, busy, upstream_error, upstream_timeout, unavailable, dnshelper_missing, not_granted, and dnshelper's own codes such as not_permitted and forbidden"},
+                "properties": {"code": {"type": "string", "description": "invalid_request, not_editable, invalid_json, missing_key, invalid_key, key_expired, key_revoked, insufficient_scope, tenant_disabled, address_not_allowed, restricted_key, outside_restriction, not_found, zone_not_found, tenant_not_found, key_not_found, stale, conflict, zone_assigned, zone_not_assignable, zone_already_configured, zone_overlaps, unknown_provider, unknown_field, required, invalid_zone, cleanup_failed, change_in_progress, reserved_name, https_required, body_too_large, rate_limited, too_many_concurrent, busy, upstream_error, upstream_timeout, unavailable, dnshelper_missing, not_granted, and dnshelper's own codes such as not_permitted and forbidden"},
                                "message": {"type": "string"}, "field": {"type": ["string", "null"]}}}}},
             "Status": {"type": "object", "properties": {"status": {"const": "ok"}}},
             "Record": {**record, "required": ["name", "type", "ttl", "data"],
@@ -219,6 +223,10 @@ doc = {
                 "zone": {"type": "string"}, "provider": {"type": "string"}, "tenant": {"type": ["string", "null"]},
                 "full": {"const": True}, "hosted": {"const": True}, "dry_run": {"type": "boolean"},
                 "valid": {"const": True, "description": "dry_run only"}}},
+            "CredentialsUpdate": {"type": "object", "required": ["credentials"], "additionalProperties": False, "properties": {
+                "provider": {"type": "string", "description": "Another DNS host; the zone's own when left out"},
+                "credentials": {"$ref": "#/components/schemas/Credentials"},
+                "dry_run": {"type": "boolean"}}},
             "ProvisionRequest": {"type": "object", "required": ["zone", "provider", "credentials", "records"], "properties": {
                 "zone": {"type": "string"}, "provider": {"type": "string"},
                 "credentials": {"$ref": "#/components/schemas/Credentials"},

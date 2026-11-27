@@ -1,0 +1,1 @@
+{"$schema":"http://json-schema.org/draft-07/schema#","title":"list-keys input","$id":"http://schema.nethserver.org/dnsapi/list-keys-input.json","description":"The keys, optionally of one owner","examples":[{},{"owner":"operator"}],"type":["object","null"],"additionalProperties":false,"properties":{"owner":{"type":"string","pattern":"^(operator|t[0-9a-f]{8})$"}}}

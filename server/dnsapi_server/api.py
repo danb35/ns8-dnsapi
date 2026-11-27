@@ -15,6 +15,7 @@ import ipaddress
 import json
 import logging
 import re
+import secrets
 import threading
 import time
 from http import HTTPStatus
@@ -38,6 +39,7 @@ PROVIDERS_CACHE_SECONDS = 600.0
 PROVIDER_KEYS = ("name", "label", "notes", "types", "fields")
 PROVIDER_FIELD_KEYS = ("name", "label", "secret", "required", "default")
 MAX_RECORDS = 100  # dnshelper's limit per change
+MAX_CREDENTIAL_FIELD = 4096  # dnshelper's limit per credential field
 RECORD_FIELDS = {"name", "type", "ttl", "data"}
 
 # dnshelper and dnsapi error codes -> HTTP status (DESIGN.md: 400 validation,
@@ -54,6 +56,8 @@ ERROR_STATUS = {
     "cnameconflict": HTTPStatus.CONFLICT,
     "zone_assigned": HTTPStatus.CONFLICT,
     "zone_not_assignable": HTTPStatus.CONFLICT,
+    "zone_already_configured": HTTPStatus.CONFLICT,
+    "zone_overlaps": HTTPStatus.CONFLICT,
     "auth_failed": HTTPStatus.BAD_GATEWAY,
 }
 
@@ -218,6 +222,8 @@ class Api:
         self.in_flight_lock = threading.Lock()
         self.zones_lock = threading.Lock()
         self.pool = concurrent.futures.ThreadPoolExecutor(max_workers=workers)
+        self.provisioning = set()  # ids of one-shot entries a request of this process is working on
+        self.provisioning_lock = threading.Lock()
 
     # authentication
 
@@ -467,7 +473,7 @@ class Api:
             zone = z["zone"]
             if req.principal.is_operator:
                 result.append({"zone": zone, "provider": z.get("provider"), "full": bool(z.get("full")),
-                               "tenant": assigned.get(zone)})
+                               "tenant": assigned.get(zone), "hosted": bool(z.get("delegated"))})
             elif assigned.get(zone) == req.principal.owner:
                 result.append({"zone": zone, "provider": z.get("provider"), "full": bool(z.get("full"))})
         return HTTPStatus.OK, {"zones": result}
@@ -478,10 +484,13 @@ class Api:
         administrator's credentials, but only operator keys need it."""
         if not req.principal.is_operator:
             raise ApiError(HTTPStatus.NOT_FOUND, "not_found", "No such endpoint")
+        return HTTPStatus.OK, {"providers": self.providers(req)}
+
+    def providers(self, req):
         with self.zones_lock:
             cached = self.providers_cache
             if cached and self.clock() - cached[0] < PROVIDERS_CACHE_SECONDS:
-                return HTTPStatus.OK, {"providers": cached[1]}
+                return cached[1]
         self.charge(req)
         output = self.dnshelper(req, "list-providers", {})
         providers = []
@@ -492,7 +501,7 @@ class Api:
             providers.append(item)
         with self.zones_lock:
             self.providers_cache = (self.clock(), providers)
-        return HTTPStatus.OK, {"providers": providers}
+        return providers
 
     def get_records(self, req):
         zone = self.reachable_zone(req)
@@ -730,6 +739,243 @@ class Api:
         status, result = self.change(req, "delete-records", {"records": [record]}, zone=zone, dry_run=False)
         return status, {"fqdn": fqdn, "value": value, "zone": zone, "changes": result["changes"]}
 
+    # domains added through the API (DESIGN.md, Phase 2): dnsapi is one of dnshelper's
+    # delegates, and adds the zone and its credential itself
+
+    def forget_zones(self):
+        with self.zones_lock:
+            self.zones_cache = None
+
+    def zone_body(self, body):
+        zone = body.get("zone")
+        if not isinstance(zone, str) or not ZONE_RE.match(zone.strip().lower().rstrip(".")):
+            raise ApiError(HTTPStatus.BAD_REQUEST, "invalid_zone", "zone is a domain name like example.com",
+                           field="zone")
+        return zone.strip().lower().rstrip(".")
+
+    def credentials_param(self, req, body):
+        """The DNS host and the credential fields for it, checked against dnshelper's
+        provider list: known names only, and the required ones present (dnshelper
+        checks them again). The values are passed on, never kept or logged."""
+        provider = body.get("provider")
+        if not isinstance(provider, str) or not provider:
+            raise ApiError(HTTPStatus.BAD_REQUEST, "invalid_request", "provider is required", field="provider")
+        info = next((p for p in self.providers(req) if p.get("name") == provider), None)
+        if info is None:
+            raise ApiError(HTTPStatus.BAD_REQUEST, "unknown_provider",
+                           "Not a DNS host dnshelper supports: see GET /v1/providers", field="provider")
+        fields = body.get("credentials")
+        if not isinstance(fields, dict):
+            raise ApiError(HTTPStatus.BAD_REQUEST, "invalid_request", "credentials is an object",
+                           field="credentials")
+        known = {f["name"]: f for f in info.get("fields", [])}
+        for name, value in fields.items():
+            if name not in known:
+                raise ApiError(HTTPStatus.BAD_REQUEST, "unknown_field", f"{provider} takes no field {name}",
+                               field=f"credentials.{name}")
+            if not isinstance(value, str) or len(value) > MAX_CREDENTIAL_FIELD:
+                raise ApiError(HTTPStatus.BAD_REQUEST, "invalid_request",
+                               f"{name} is a string of at most {MAX_CREDENTIAL_FIELD} characters",
+                               field=f"credentials.{name}")
+        for name, f in known.items():
+            if f.get("required") and not fields.get(name) and not f.get("default"):
+                raise ApiError(HTTPStatus.BAD_REQUEST, "required", f"{name} is required",
+                               field=f"credentials.{name}")
+        return provider, {k: v for k, v in fields.items() if v != ""}
+
+    def dry_run_param(self, body):
+        dry_run = body.get("dry_run", False)
+        if not isinstance(dry_run, bool):
+            raise ApiError(HTTPStatus.BAD_REQUEST, "invalid_request", "dry_run is true or false", field="dry_run")
+        return dry_run
+
+    def validate_credentials(self, req, zone, provider, fields):
+        """That the credential reaches the zone at the DNS host, before anything is stored."""
+        self.charge(req)
+        self.dnshelper(req, "validate-zone", {"zone": zone, "provider": provider, "fields": fields})
+
+    def add_delegated(self, req, zone, provider, fields, name):
+        """Add a credential of dnsapi's own and the zone with it. Returns the credential
+        id. If the zone cannot be added, the credential is removed again."""
+        self.charge(req, 2)
+        cred = self.dnshelper(req, "add-credential", {"name": name, "provider": provider, "fields": fields})["id"]
+        try:
+            self.dnshelper(req, "add-zone", {"zone": zone, "credential": cred})
+        except ApiError:
+            self.quietly("remove-credential", {"id": cred})
+            raise
+        finally:
+            self.forget_zones()
+        return cred
+
+    def quietly(self, action, data):
+        """A clean-up step: True if it worked, logged if not."""
+        try:
+            self.run_task("dnshelper", action, data)
+            return True
+        except ApiError as exc:
+            log.error("%s %s failed: %s", action, json.dumps(data), exc.code)
+            return False
+
+    def hosted_entry(self, req, zone):
+        """dnshelper's entry for a zone dnsapi added, read afresh, or None."""
+        self.charge(req)
+        zones = self.dnshelper(req, "list-zones", {}).get("zones", [])
+        return next((z for z in zones if z.get("zone") == zone and z.get("delegated")), None)
+
+    def add_hosted_zone(self, req):
+        """POST /v1/zones: a customer's domain with its DNS host and credentials, kept
+        so that its records can be managed through the API (DESIGN.md, Phase 2, Hosting)."""
+        self.require_operator(req)
+        self.require_write(req)
+        body = self.body_object(req)
+        zone = self.zone_body(body)
+        provider, fields = self.credentials_param(req, body)
+        tenant_id = body.get("tenant")
+        if tenant_id is not None and (not isinstance(tenant_id, str) or not TENANT_ID_RE.match(tenant_id)
+                                      or self.store.tenant(tenant_id) is None):
+            raise ApiError(HTTPStatus.NOT_FOUND, "tenant_not_found", "No such tenant", field="tenant")
+        dry_run = self.dry_run_param(body)
+        audit = {"zone": zone, "provider": provider, "tenant": tenant_id or ""}
+        try:
+            self.validate_credentials(req, zone, provider, fields)
+            if dry_run:
+                self.audit(req, "add-zone", dry_run=True, **audit)
+                return HTTPStatus.OK, {"zone": zone, "provider": provider, "tenant": tenant_id,
+                                       "dry_run": True, "valid": True}
+            cred = self.add_delegated(req, zone, provider, fields, f"dnsapi: {zone}")
+            if tenant_id:
+                try:
+                    self.charge(req)
+                    self.own_action("assign-zone", {"tenant": tenant_id, "zone": zone})
+                except ApiError:
+                    self.quietly("remove-zone", {"zone": zone})
+                    self.quietly("remove-credential", {"id": cred})
+                    self.forget_zones()
+                    raise
+        except ApiError as exc:
+            self.audit(req, "add-zone", result=f"rejected:{exc.code}" if exc.status < 500 else f"failed:{exc.code}",
+                       **audit)
+            raise
+        self.audit(req, "add-zone", **audit)
+        return HTTPStatus.CREATED, {"zone": zone, "provider": provider, "tenant": tenant_id, "full": True,
+                                    "hosted": True, "dry_run": False}
+
+    def remove_hosted_zone(self, req):
+        """DELETE /v1/zones/{zone}: a zone dnsapi added. dnshelper forgets it and its
+        credential; the records stay at the DNS host."""
+        self.require_operator(req)
+        self.require_write(req)
+        zone = self.zone_param(req)
+        entry = self.hosted_entry(req, zone)
+        if entry is None:
+            # Not added through the API, or taken over by the administrator since.
+            raise ApiError(HTTPStatus.NOT_FOUND, "zone_not_found", "No zone added through the API by that name")
+        tenant_id = self.store.zone_tenant(zone)
+        if tenant_id:
+            self.own_action("unassign-zone", {"tenant": tenant_id, "zone": zone})
+        self.charge(req, 2)
+        try:
+            self.dnshelper(req, "remove-zone", {"zone": zone})
+        finally:
+            self.forget_zones()
+        if not self.quietly("remove-credential", {"id": entry["credential"]}):
+            log.warning("the credential %s of %s was left in dnshelper", entry["credential"], zone)
+        self.audit(req, "remove-zone", zone=zone, provider=entry.get("provider") or "", tenant=tenant_id or "")
+        return HTTPStatus.NO_CONTENT, None
+
+    def provision(self, req):
+        """POST /v1/zones/provision: write records into a customer's domain with
+        credentials that are not kept (DESIGN.md, Phase 2, One-shot). The credential
+        and the zone exist in dnshelper only while the request runs; a journal entry
+        lets cleanup_provisioning() remove them if this process stops before it does."""
+        self.require_operator(req)
+        self.require_write(req)
+        body = self.body_object(req)
+        zone = self.zone_body(body)
+        provider, fields = self.credentials_param(req, body)
+        records = self.records_param(body, "records", ("name", "type", "data"))
+        self.require_covered(req, records, "records")
+        self.require_not_reserved(zone, records, "records")
+        dry_run = self.dry_run_param(body)
+        self.validate_credentials(req, zone, provider, fields)
+        entry_id = secrets.token_hex(8)
+        with self.provisioning_lock:
+            self.provisioning.add(entry_id)
+        self.store.provisioning_set(entry_id, {"zone": zone, "credential": None})
+        failure = None
+        result = None
+        cred = None
+        try:
+            self.charge(req)
+            cred = self.dnshelper(req, "add-credential",
+                                  {"name": f"dnsapi provision {zone}", "provider": provider, "fields": fields})["id"]
+            self.store.provisioning_set(entry_id, {"zone": zone, "credential": cred})
+            self.charge(req)
+            self.dnshelper(req, "add-zone", {"zone": zone, "credential": cred})
+            _, result = self.change(req, "append-records", {"records": records}, zone=zone, dry_run=dry_run)
+        except ApiError as exc:
+            failure = exc
+        finally:
+            cleaned = self.cleanup_entry(entry_id, {"zone": zone, "credential": cred})
+            with self.provisioning_lock:
+                self.provisioning.discard(entry_id)
+        outcome = "dry-run" if dry_run else "ok"
+        if failure is not None:
+            outcome = f"{'rejected' if failure.status < 500 else 'failed'}:{failure.code}"
+        if not cleaned:
+            outcome += ",cleanup_failed"
+        self.audit(req, "provision", zone=zone, provider=provider, result=outcome)
+        if not cleaned:
+            what = (f"{failure.code}: {failure.message}; " if failure is not None else
+                    ("the records were written; " if not dry_run else ""))
+            raise ApiError(HTTPStatus.BAD_GATEWAY, "cleanup_failed",
+                           f"{what}the credential could not be removed from dnshelper yet, and will be "
+                           "removed by a later clean-up")
+        if failure is not None:
+            raise failure
+        return HTTPStatus.OK, {"zone": zone, "dry_run": result["dry_run"], "changes": result["changes"],
+                               "records": result["records"]}
+
+    def cleanup_entry(self, entry_id, entry):
+        """Remove a one-shot zone and credential from dnshelper, then the journal entry.
+        The zone is removed only if dnshelper has it with this entry's credential: a zone
+        that was there already (zone_already_configured) is not this request's."""
+        cred = entry.get("credential")
+        ok = True
+        if cred:
+            try:
+                zones = self.run_task("dnshelper", "list-zones", {}).get("zones", [])
+            except ApiError as exc:
+                log.error("one-shot clean-up of %s: list-zones failed: %s", entry.get("zone"), exc.code)
+                return False
+            mine = [z["zone"] for z in zones if z.get("credential") == cred]
+            for zone in mine:
+                ok = self.quietly("remove-zone", {"zone": zone}) and ok
+            if ok:
+                try:
+                    self.run_task("dnshelper", "remove-credential", {"id": cred})
+                except ApiError as exc:
+                    if exc.code != "credential_not_found":
+                        log.error("one-shot clean-up: remove-credential %s failed: %s", cred, exc.code)
+                        ok = False
+            self.forget_zones()
+        if ok:
+            self.store.provisioning_drop(entry_id)
+        return ok
+
+    def cleanup_provisioning(self):
+        """Remove what one-shot requests left in dnshelper when this process, or the
+        broker, stopped before their own clean-up (at start and every few minutes).
+        Entries a request of this process is still working on are left alone."""
+        with self.provisioning_lock:
+            active = set(self.provisioning)
+        for entry_id, entry in self.store.provisioning().items():
+            if entry_id in active:
+                continue
+            if self.cleanup_entry(entry_id, entry):
+                log.info("one-shot clean-up: removed what a stopped request left for %s", entry.get("zone"))
+
     # tenants (operator keys)
 
     def tenant_param(self, req):
@@ -896,14 +1142,15 @@ class Api:
     def audit(self, req, action, **fields):
         # "key" is who acted; a key the operator made, changed or revoked is
         # "target_key", in the journal line as on the Activity page.
+        result = fields.pop("result", "ok")
         extra = {("target_key" if k == "key" else k): v for k, v in fields.items()}
         details = " ".join(f'{k}="{v}"' if isinstance(v, str) else f"{k}={json.dumps(v)}"
                            for k, v in extra.items())
-        log.info('dnsapi audit: key="%s" owner="%s" address="%s" action="%s" %s result="ok"',
-                 req.principal.key_id, req.principal.owner, req.client_ip, action, details)
+        log.info('dnsapi audit: key="%s" owner="%s" address="%s" action="%s" %s result="%s"',
+                 req.principal.key_id, req.principal.owner, req.client_ip, action, details, result)
         self.store.append_activity({
             "source": "api", "key": req.principal.key_id, "owner": req.principal.owner,
-            "address": req.client_ip, "action": action, "result": "ok", **extra,
+            "address": req.client_ip, "action": action, "result": result, **extra,
         })
 
 
@@ -912,7 +1159,9 @@ TENANT = r"(?P<tenant>[^/]+)"
 
 # (pattern, {method: Api method name}); /v1/status is answered in app.py.
 ROUTES = [
-    (r"/v1/zones", {"GET": "list_zones"}),
+    (r"/v1/zones", {"GET": "list_zones", "POST": "add_hosted_zone"}),
+    (r"/v1/zones/provision", {"POST": "provision"}),
+    (rf"/v1/zones/{ZONE}", {"DELETE": "remove_hosted_zone"}),
     (rf"/v1/zones/{ZONE}/records", {"GET": "get_records", "POST": "append_records", "DELETE": "delete_records"}),
     (rf"/v1/zones/{ZONE}/changes", {"POST": "apply_changes"}),
     (rf"/v1/zones/{ZONE}/rrsets", {"PUT": "set_rrsets"}),

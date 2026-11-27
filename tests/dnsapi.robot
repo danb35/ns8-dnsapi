@@ -365,6 +365,18 @@ Check that the providers come from dnshelper
     ${secret} =    Evaluate    {f['name']: f['secret'] for f in $pdns['fields']}
     Should Be True    ${secret}[api_key]
 
+Check that adding domains needs a dnshelper with delegates
+    # dnshelper 0.7.1 (DNSHELPER_IMAGE) has no dnszoneadmin role: the api-server refuses
+    # validate-zone, and the API says that dnshelper may need updating. The rest of the
+    # suite shows that the dnswriter half of the grant still works there.
+    Expect API    503    POST    /v1/zones    ${OPERATOR_KEY}
+    ...    {"zone": "customer.example", "provider": "cloudflare", "credentials": {"api_token": "ci-not-a-real-token"}, "dry_run": true}
+    ...    code=not_granted
+    Expect API    503    POST    /v1/zones/provision    ${OPERATOR_KEY}
+    ...    {"zone": "customer.example", "provider": "cloudflare", "credentials": {"api_token": "ci-not-a-real-token"}, "records": [{"name": "@", "type": "TXT", "data": "x"}], "dry_run": true}
+    ...    code=not_granted
+    Expect API    404    DELETE    /v1/zones/${ZONE_A}    ${OPERATOR_KEY}    code=zone_not_found
+
 Check that the host record is published in the managed zone
     Run action    ${module_id}    configure-module    {"host": "${API_HOST}"}
     ${config} =    Run action    ${module_id}    get-configuration

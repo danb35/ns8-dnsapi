@@ -144,6 +144,50 @@ class Store:
             except OSError as exc:
                 log.error("cannot write activity.jsonl: %s", exc)
 
+    # one-shot journal (DESIGN.md, Phase 2, One-shot): {entry id: {"zone", "credential",
+    # "started"}} for each credential a one-shot request may have left in dnshelper.
+
+    def _provisioning_path(self):
+        return os.path.join(self.usage_dir, "provisioning.json") if self.usage_dir else None
+
+    def provisioning(self):
+        path = self._provisioning_path()
+        if not path:
+            return {}
+        with self.lock:
+            try:
+                with open(path) as fp:
+                    data = json.load(fp)
+            except (OSError, ValueError):
+                return {}
+        return data if isinstance(data, dict) else {}
+
+    def _write_provisioning(self, update):
+        path = self._provisioning_path()
+        if not path:
+            return
+        with self.lock:
+            try:
+                with open(path) as fp:
+                    data = json.load(fp)
+            except (OSError, ValueError):
+                data = {}
+            if not isinstance(data, dict):
+                data = {}
+            update(data)
+            fd, tmp = tempfile.mkstemp(dir=self.usage_dir, prefix=".provisioning.")
+            with os.fdopen(fd, "w") as fp:
+                json.dump(data, fp)
+            os.replace(tmp, path)
+
+    def provisioning_set(self, entry_id, entry):
+        def update(data):
+            data[entry_id] = {**data.get(entry_id, {"started": isoformat(self.clock())}), **entry}
+        self._write_provisioning(update)
+
+    def provisioning_drop(self, entry_id):
+        self._write_provisioning(lambda data: data.pop(entry_id, None))
+
     # last-used times
 
     def touch_key(self, key_id):

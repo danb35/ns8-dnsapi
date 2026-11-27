@@ -125,7 +125,8 @@
         "unavailable_title": "dnshelper недоступний",
         "unavailable_dnshelper_missing": "dnshelper не встановлено. dnsapi змінює записи DNS лише через dnshelper.",
         "unavailable_dnshelper_too_old": "dnshelper старіший за 0.7.0 і не повідомляє, які зони може використовувати dnsapi. Оновіть його.",
-        "unavailable_unavailable": "dnshelper не відповів. Спробуйте пізніше."
+        "unavailable_unavailable": "dnshelper не відповів. Спробуйте пізніше.",
+        "hosted": "Додано через API"
     },
     "tenants": {
         "title": "Орендарі",

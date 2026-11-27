@@ -125,7 +125,8 @@
         "unavailable_title": "dnshelper non è disponibile",
         "unavailable_dnshelper_missing": "dnshelper non è installato. dnsapi modifica i record DNS solo tramite dnshelper.",
         "unavailable_dnshelper_too_old": "dnshelper è precedente alla 0.7.0 e non indica quali zone dnsapi può usare. Aggiornalo.",
-        "unavailable_unavailable": "dnshelper non ha risposto. Riprova più tardi."
+        "unavailable_unavailable": "dnshelper non ha risposto. Riprova più tardi.",
+        "hosted": "Aggiunta tramite l'API"
     },
     "tenants": {
         "title": "Tenant",

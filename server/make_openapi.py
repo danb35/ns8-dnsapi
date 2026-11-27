@@ -71,7 +71,25 @@ doc = {
         "/v1/zones": {"get": {
             "summary": "The key's zones",
             "description": "An operator key gets every zone dnsapi may use, with its tenant; a tenant key its own zones.",
-            "tags": ["zones"], "responses": {**ok("#/components/schemas/ZoneList"), **ZONE_ERRORS}}},
+            "tags": ["zones"], "responses": {**ok("#/components/schemas/ZoneList"), **ZONE_ERRORS}},
+            "post": {
+                "summary": "Add a customer's domain with its DNS host and credentials",
+                "description": "Operator keys without restrict only. dnsapi checks that the credentials reach the zone at the DNS host, then adds them and the zone to dnshelper as its own, and assigns the zone to tenant when given. The credentials are kept by dnshelper, for as long as the zone is, so that its records can be managed through the other endpoints; dnsapi never stores or logs them. Ask customers for credentials limited to the zone where the DNS host offers them. dry_run checks the credentials and stores nothing. Needs dnshelper 0.8.0 or later, with dnsapi listed in its delegates setting: otherwise 403 not_permitted (not listed) or 503 not_granted (older dnshelper). 409 zone_already_configured if dnshelper manages the zone already, 409 zone_overlaps if it is inside or around a zone dnsapi did not add; 502 auth_failed if the DNS host refuses the credentials.",
+                "tags": ["domains (operator)"], "requestBody": body("#/components/schemas/HostedZoneRequest"),
+                "responses": {**ok("#/components/schemas/HostedZone", "Added", "201"),
+                              **ok("#/components/schemas/HostedZone", "dry_run: the credentials work"),
+                              **errors(400, 401, 403, 404, 409, 429, 502, 503, 504)}}},
+        "/v1/zones/provision": {"post": {
+            "summary": "Write records into a customer's domain without keeping its credentials",
+            "description": "Operator keys without restrict only. For a domain that only needs some records written once, such as for transactional mail. dnsapi checks the credentials, adds them and the zone to dnshelper, writes records as POST /v1/zones/{zone}/records does, and removes the zone and credentials again, whatever happened in between. The records stay at the DNS host. If the removal fails, the answer is 502 cleanup_failed and dnsapi retries it within minutes. dry_run reports what would be written and writes nothing. Same requirements and errors as POST /v1/zones.",
+            "tags": ["domains (operator)"], "requestBody": body("#/components/schemas/ProvisionRequest"),
+            "responses": {**ok("#/components/schemas/ProvisionResult"), **errors(400, 401, 403, 409, 413, 429, 502, 503, 504)}}},
+        "/v1/zones/{zone}": {
+            "parameters": [ZONE_P],
+            "delete": {"summary": "Remove a domain added with POST /v1/zones",
+                       "description": "Operator keys without restrict only. dnshelper forgets the zone and its credentials, and the zone is unassigned from its tenant. The records stay at the DNS host. 404 for a zone that was not added through the API, or that the administrator has taken over since.",
+                       "tags": ["domains (operator)"],
+                       "responses": {"204": {"description": "Removed"}, **errors(401, 403, 404, 429, 502, 503, 504)}}},
         "/v1/zones/{zone}/records": {
             "parameters": [ZONE_P],
             "get": {"summary": "Read records", "tags": ["records"],
@@ -133,6 +151,7 @@ doc = {
                       "requestBody": body("#/components/schemas/TenantRequest"),
                       "responses": {**ok("#/components/schemas/Tenant"), **errors(400, 401, 403, 404, 429)}},
             "delete": {"summary": "Remove a tenant and its keys; its zones' records are not changed",
+                       "description": "Its zones are unassigned. A zone added with POST /v1/zones stays in dnshelper with its credentials, for another tenant or DELETE /v1/zones/{zone}.",
                        "tags": ["tenants (operator)"],
                        "responses": {"204": {"description": "Removed"}, **errors(401, 403, 404, 429)}}},
         "/v1/tenants/{id}/zones/{zone}": {
@@ -173,7 +192,7 @@ doc = {
         "schemas": {
             "Error": {"type": "object", "required": ["error"], "properties": {"error": {
                 "type": "object", "required": ["code", "message", "field"],
-                "properties": {"code": {"type": "string", "description": "invalid_request, not_editable, invalid_json, missing_key, invalid_key, key_expired, key_revoked, insufficient_scope, tenant_disabled, address_not_allowed, restricted_key, outside_restriction, not_found, zone_not_found, tenant_not_found, key_not_found, stale, conflict, zone_assigned, zone_not_assignable, reserved_name, https_required, body_too_large, rate_limited, too_many_concurrent, busy, upstream_error, upstream_timeout, unavailable, dnshelper_missing, not_granted, and dnshelper's own codes such as not_permitted and forbidden"},
+                "properties": {"code": {"type": "string", "description": "invalid_request, not_editable, invalid_json, missing_key, invalid_key, key_expired, key_revoked, insufficient_scope, tenant_disabled, address_not_allowed, restricted_key, outside_restriction, not_found, zone_not_found, tenant_not_found, key_not_found, stale, conflict, zone_assigned, zone_not_assignable, zone_already_configured, zone_overlaps, unknown_provider, unknown_field, required, invalid_zone, cleanup_failed, reserved_name, https_required, body_too_large, rate_limited, too_many_concurrent, busy, upstream_error, upstream_timeout, unavailable, dnshelper_missing, not_granted, and dnshelper's own codes such as not_permitted and forbidden"},
                                "message": {"type": "string"}, "field": {"type": ["string", "null"]}}}}},
             "Status": {"type": "object", "properties": {"status": {"const": "ok"}}},
             "Record": {**record, "required": ["name", "type", "ttl", "data"],
@@ -185,7 +204,31 @@ doc = {
             "Zone": {"type": "object", "required": ["zone", "provider", "full"],
                      "properties": {"zone": {"type": "string"}, "provider": {"type": ["string", "null"]},
                                     "full": {"type": "boolean", "description": "false: dnshelper lets dnsapi change only some records, such as ACME challenges"},
-                                    "tenant": {"type": ["string", "null"], "description": "Operator keys only"}}},
+                                    "tenant": {"type": ["string", "null"], "description": "Operator keys only"},
+                                    "hosted": {"type": "boolean", "description": "Operator keys only: added with POST /v1/zones, so DELETE /v1/zones/{zone} can remove it"}}},
+            "Credentials": {"type": "object", "additionalProperties": {"type": "string", "maxLength": 4096},
+                            "description": "The DNS host's credential fields, by the names GET /v1/providers gives",
+                            "examples": [{"api_token": "..."}]},
+            "HostedZoneRequest": {"type": "object", "required": ["zone", "provider", "credentials"], "properties": {
+                "zone": {"type": "string", "examples": ["customer.example"]},
+                "provider": {"type": "string", "description": "A name from GET /v1/providers", "examples": ["cloudflare"]},
+                "credentials": {"$ref": "#/components/schemas/Credentials"},
+                "tenant": {"type": ["string", "null"], "description": "Assign the zone to this tenant"},
+                "dry_run": {"type": "boolean"}}},
+            "HostedZone": {"type": "object", "required": ["zone", "provider", "tenant", "dry_run"], "properties": {
+                "zone": {"type": "string"}, "provider": {"type": "string"}, "tenant": {"type": ["string", "null"]},
+                "full": {"const": True}, "hosted": {"const": True}, "dry_run": {"type": "boolean"},
+                "valid": {"const": True, "description": "dry_run only"}}},
+            "ProvisionRequest": {"type": "object", "required": ["zone", "provider", "credentials", "records"], "properties": {
+                "zone": {"type": "string"}, "provider": {"type": "string"},
+                "credentials": {"$ref": "#/components/schemas/Credentials"},
+                "records": {"type": "array", "minItems": 1, "maxItems": 100, "items": {"$ref": "#/components/schemas/RecordInput"}},
+                "dry_run": {"type": "boolean"}}},
+            "ProvisionResult": {"type": "object", "required": ["zone", "dry_run", "changes", "records"], "properties": {
+                "zone": {"type": "string"}, "dry_run": {"type": "boolean"},
+                "changes": {"$ref": "#/components/schemas/ChangeResult/properties/changes"},
+                "records": {"type": "array", "items": {"$ref": "#/components/schemas/Record"},
+                            "description": "The zone's records after the change, as the DNS host reports them"}}},
             "ProviderField": {"type": "object", "required": ["name", "label", "secret", "required"],
                               "properties": {"name": {"type": "string", "description": "The key in the credential's fields", "examples": ["api_token"]},
                                              "label": {"type": "string"},

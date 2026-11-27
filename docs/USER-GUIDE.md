@@ -251,6 +251,31 @@ Some records in a customer's zone may have been written by another NS8 module, s
 server's MX or DKIM record. A customer may change them, but the API warns that the module may
 write them again; a good portal shows that warning before applying the change.
 
+### Letting the portal add customers' domains
+
+The portal can also add a customer's domain itself, with the DNS host and credentials the
+customer already uses, instead of you adding it in dnshelper. It can keep the domain, so that the
+customer manages its records through the portal, or only write the records your service needs
+(for example for mail sending) and drop the credentials straight away. This needs dnshelper 0.8.0
+or later, and is off until you turn it on:
+
+1. In dnshelper's **Settings**, add `dnsapi1` (this module's name) to **Delegate modules**.
+2. That is all: dnsapi asks for the role it needs itself. Until step 1, the portal's requests are
+   refused with a message saying that dnsapi is not one of dnshelper's delegates.
+
+dnsapi can then add zones and credentials of its own, and change every record of those zones
+without an access rule. It cannot touch your own zones and credentials, nor add a zone dnshelper
+already manages or one inside or around yours. In dnshelper, its zones and credentials are tagged
+**Delegated to dnsapi1**; on the Tenants page here, such a zone is tagged **Added through the
+API**. Removing a tenant keeps its added zones, unassigned, until the portal removes them.
+
+Turn this on only if you accept that dnshelper then holds your customers' credentials: for as
+long as their domain is kept, and briefly for records written once. Many DNS hosts' credentials
+reach the customer's whole account, not one domain. Ask customers for credentials limited to the
+domain, and with an expiry, where their DNS host offers them (Cloudflare's API tokens can be
+limited to one zone, an expiry and an IP address). Taking dnsapi out of **Delegate modules**
+stops it at once; the zones it added stay in dnshelper until you remove or take them over.
+
 ## Certificates for other systems (ACME DNS-01)
 
 A system that gets certificates with the DNS-01 challenge creates a TXT record at

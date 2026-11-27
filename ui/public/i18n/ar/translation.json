@@ -125,7 +125,8 @@
         "unavailable_title": "dnshelper غير متاح",
         "unavailable_dnshelper_missing": "dnshelper غير مثبّت. لا يغيّر dnsapi سجلات DNS إلا عبر dnshelper.",
         "unavailable_dnshelper_too_old": "إصدار dnshelper أقدم من 0.7.0 ولا يبيّن المناطق التي يمكن لـ dnsapi استخدامها. حدّثه.",
-        "unavailable_unavailable": "لم يستجب dnshelper. حاول لاحقًا."
+        "unavailable_unavailable": "لم يستجب dnshelper. حاول لاحقًا.",
+        "hosted": "أُضيفت عبر واجهة API"
     },
     "tenants": {
         "title": "المستأجرون",

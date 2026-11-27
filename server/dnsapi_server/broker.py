@@ -33,6 +33,11 @@ MAX_TASKS = 16
 
 DNSHELPER_READ = {"list-zones", "get-records", "list-owners", "check-propagation", "list-providers"}
 DNSHELPER_WRITE = {"append-records", "set-records", "delete-records", "apply-changes"}
+# As one of dnshelper's delegates (DESIGN.md, Phase 2): domains added through the API with
+# the customer's credentials. dnshelper limits them to dnsapi's own credentials and zones.
+# update-credential and update-zone are left out until there is a use for them.
+DNSHELPER_DELEGATE = {"validate-zone", "list-provider-zones", "add-credential", "remove-credential",
+                      "add-zone", "remove-zone"}
 SELF_ACTIONS = {"add-tenant", "update-tenant", "remove-tenant", "assign-zone", "unassign-zone",
                 "create-key", "update-key", "revoke-key", "revoke-exposed-key"}
 
@@ -42,7 +47,7 @@ def check(target, action, data):
     if not isinstance(data, dict):
         return "data must be an object"
     if target == "dnshelper":
-        if action in DNSHELPER_READ:
+        if action in DNSHELPER_READ or action in DNSHELPER_DELEGATE:
             return None
         if action in DNSHELPER_WRITE:
             # Records written through the API are the tenant's, never dnsapi's own.

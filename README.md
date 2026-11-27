@@ -35,8 +35,9 @@ own host name; tenants, keys, authentication and rate limits; reading and changi
 DNS-01; the admin UI (Status, Tenants, Keys, Activity, Settings) and the OpenAPI document; a full
 node test; the API's host name published through dnshelper; and the hardening from a security
 review (the broker, HTTPS only, concurrency limits); editable keys; the provider list; and CI
-that tests against a real dnshelper. Phase 2 (adding zones through the API) is not
-built. Hardening that was considered and not built is listed in DESIGN.md, "Further hardening".
+that tests against a real dnshelper. Phase 2, adding customers' domains through the API, is
+built on this branch: it needs dnshelper 0.8.0, which is not released yet, and has not been
+tried on a node. Hardening that was considered and not built is listed in DESIGN.md, "Further hardening".
 
 ## Install
 
@@ -87,15 +88,15 @@ are `{"error": {"code", "message", "field"}}`:
 
 | Status | Codes |
 |---|---|
-| 400 | `invalid_request`, `invalid_json` (with `field`), and dnshelper's `invalid_request`, `unsupported` |
+| 400 | `invalid_request`, `invalid_json` (with `field`), `invalid_zone`, `unknown_provider`, `unknown_field`, `required` (a credential field), and dnshelper's `invalid_request`, `unsupported` |
 | 401 | `missing_key`, `invalid_key`, `key_expired`, `key_revoked` |
 | 403 | `insufficient_scope`, `tenant_disabled`, `address_not_allowed`, `restricted_key`, `outside_restriction`, `reserved_name` (the API's own host name and its `_acme-challenge`), `https_required` (the request came over plain HTTP); dnshelper's `not_permitted`, `forbidden` (apex NS, SOA) |
 | 404 | `not_found`, `zone_not_found`, `tenant_not_found`, `key_not_found` |
 | 405 | `method_not_allowed` |
-| 409 | `stale` (a record to remove is gone), `conflict` (e.g. a CNAME beside other records), `zone_assigned` (another tenant has the zone), `zone_not_assignable` (dnshelper does not let dnsapi write in it) |
+| 409 | `stale` (a record to remove is gone), `conflict` (e.g. a CNAME beside other records), `zone_assigned` (another tenant has the zone), `zone_not_assignable` (dnshelper does not let dnsapi write in it), `zone_already_configured` (dnshelper manages the domain already), `zone_overlaps` (it is inside or around a zone dnsapi did not add) |
 | 413 | `body_too_large` |
 | 429 | `rate_limited`, `too_many_concurrent` (more than 4 requests of one key at once), with `Retry-After` |
-| 502 | `upstream_error` (the DNS host failed), dnshelper's `auth_failed` (the DNS host refused its credentials) |
+| 502 | `upstream_error` (the DNS host failed), dnshelper's `auth_failed` (the DNS host refused its credentials), `cleanup_failed` (one-shot: the credentials are still in dnshelper and will be removed by a later clean-up) |
 | 503 | `dnshelper_missing`, `not_granted` (dnshelper does not let dnsapi run what the request needs: dnshelper is too old for it), `unavailable`, `busy` (too many requests at once for the whole service) |
 | 504 | `upstream_timeout` |
 
@@ -105,7 +106,10 @@ key cannot be used to find out which zones are managed.
 | Request | Key | |
 |---|---|---|
 | `GET /v1/status` | none | liveness only |
-| `GET /v1/zones` | any | `{"zones": [{"zone", "provider", "full", "tenant"}]}`: the key's zones (operator: every assignable zone; `tenant` only for operator keys) |
+| `GET /v1/zones` | any | `{"zones": [{"zone", "provider", "full", "tenant", "hosted"}]}`: the key's zones (operator: every assignable zone; `tenant` and `hosted` only for operator keys) |
+| `POST /v1/zones` `{"zone", "provider", "credentials", "tenant", "dry_run"}` | operator | add a customer's domain with its DNS host and credentials, kept in dnshelper; see [Domains added through the API](#domains-added-through-the-api) |
+| `DELETE /v1/zones/{zone}` | operator | remove a domain added with `POST /v1/zones` |
+| `POST /v1/zones/provision` `{"zone", "provider", "credentials", "records", "dry_run"}` | operator | write records into a customer's domain without keeping its credentials |
 | `GET /v1/zones/{zone}/records?name=&type=` | any | the records; those another module wrote carry `owned_by` |
 | `GET /v1/zones/{zone}/propagation?name=&type=` | any | what the zone's name servers answer, compared with the DNS host |
 | `POST /v1/zones/{zone}/changes` `{"remove", "add", "dry_run"}` | write | remove exact records and add others as one change; refused as a whole with 409 `stale` if a record to remove is no longer there |
@@ -155,6 +159,39 @@ twice).
              "add": [{"name": "www", "type": "A", "data": "192.0.2.2"}], "dry_run": true}' \
         https://dnsapi.example.com/v1/zones/example.com/changes
 
+## Domains added through the API
+
+The operator's portal can add a customer's domain with the customer's own DNS host and
+credentials, instead of the administrator adding it in dnshelper (DESIGN.md, Phase 2). This needs
+dnshelper 0.8.0 or later, with dnsapi listed in its **Delegate modules** setting; otherwise these
+requests answer 403 `not_permitted` (not listed) or 503 `not_granted` (dnshelper too old).
+Operator keys without `restrict` only; a tenant key gets 404.
+
+- `credentials` holds the DNS host's fields, by the names `GET /v1/providers` gives, for example
+  `{"api_token": "..."}`. dnsapi checks the names and the required fields, then has dnshelper
+  check that they reach the zone at the DNS host before anything is stored (a refusal is 502
+  `auth_failed`). They are passed to dnshelper and never stored or logged by dnsapi.
+- **Hosting**, `POST /v1/zones`: the domain and its credentials stay in dnshelper, and the zone is
+  managed through the other endpoints like any other. `tenant` assigns it in the same request.
+  `dry_run` only checks the credentials. Answers 201 `{"zone", "provider", "tenant", "full",
+  "hosted", "dry_run"}`. `DELETE /v1/zones/{zone}` removes it (and its credentials) from
+  dnshelper again; the records stay at the DNS host. A zone not added this way is 404.
+- **One-shot**, `POST /v1/zones/provision`: for a domain that only needs some records written,
+  such as for transactional mail. dnsapi adds the credentials and the zone, writes `records` (at
+  most 100, as `POST .../records` does), and removes both again, whatever happened. Answers 200
+  `{"zone", "dry_run", "changes", "records"}`. A `dry_run` shows what would be written. If the
+  removal fails, the answer is 502 `cleanup_failed`, and dnsapi retries within minutes.
+- A domain dnshelper manages already is 409 `zone_already_configured`; one inside or around a
+  zone dnsapi did not add is 409 `zone_overlaps`.
+- Removing a tenant unassigns its hosted zones and keeps them, for another tenant or `DELETE
+  /v1/zones/{zone}`.
+- dnshelper's administrator sees these zones and credentials tagged "Delegated to dnsapi1", and
+  can remove them or take them over; a taken-over zone is no longer `hosted`, and `DELETE` gives
+  404.
+
+Ask customers for credentials limited to their zone, and with an expiry, where the DNS host offers
+them: dnshelper holds hosted credentials for as long as the domain is hosted.
+
 ## ACME endpoints
 
 `POST /v1/acme/present` and `POST /v1/acme/cleanup` take `{"fqdn": "_acme-challenge.www.example.com.",
@@ -197,15 +234,19 @@ for whichever customer is logged in. The administrator gives it the key and the 
   to delete one value of several), with a dry run first when warnings matter.
 - **Waiting for a change to be visible**: `GET .../propagation?name=&type=`.
 - **Which DNS hosts dnshelper works with**: `GET /v1/providers`, for example to tell a customer
-  whether their DNS host can be used, or which record types it takes. It is dnshelper's own list,
-  so a DNS host added to dnshelper appears there without a change to the portal. dnsapi cannot
-  add credentials or zones yet: the administrator does that in dnshelper.
+  whether their DNS host can be used, which record types it takes, and which credential fields to
+  ask for. It is dnshelper's own list, so a DNS host added to dnshelper appears there without a
+  change to the portal.
+- **Customer adds a domain at their own DNS host**: ask for the fields `GET /v1/providers` lists,
+  then `POST /v1/zones` with `tenant` (a `dry_run` first checks the credentials). For records
+  written once, `POST /v1/zones/provision` instead. See [Domains added through the
+  API](#domains-added-through-the-api).
 - **Customer scripts their own DNS**: `POST /v1/tenants/{id}/keys` makes a tenant key; show it
   once. Change its label, allowed addresses or expiry with `PATCH .../keys/{key id}`; revoke it
   with `DELETE .../keys/{key id}`. A key that should reach more (write instead of read, other
   records) is a new key.
 - **Customer leaves**: `DELETE /v1/tenants/{id}` removes the tenant and its keys and unassigns its
-  zones; no record changes.
+  zones; no record changes. Remove the domains added for it with `DELETE /v1/zones/{zone}`.
 
 Set a timeout of at least 60 s, and back off on 429 for `Retry-After` seconds. Every request is
 listed on the administrator's Activity page with the operator key and the tenant; dnshelper's
@@ -262,7 +303,9 @@ history names the tenant.
 dnsapi is an ordinary dnshelper consumer
 ([its README, "Using dnshelper from another module"](https://github.com/danb35/ns8-dnshelper#using-dnshelper-from-another-module)):
 
-- the grant is `dnshelper@any:dnswriter` (not `@cluster`: DESIGN.md, Module plumbing, says why);
+- the grant is `dnshelper@any:dnswriter,dnszoneadmin` (not `@cluster`: DESIGN.md, Module plumbing,
+  says why). `dnszoneadmin` (dnshelper 0.8.0) is for the domains added through the API;
+  `dnswriter` stays so that an older dnshelper, without that role, grants the rest;
 - it finds dnshelper with `list_service_providers`, the first by install order when there are
   several;
 - it calls `list-zones` (cached 30 s), `list-providers` (cached 10 minutes), `get-records`, `list-owners`,
@@ -270,7 +313,10 @@ dnsapi is an ordinary dnshelper consumer
   `rrset`) and `delete-records`, always with `on_behalf_of="<tenant>:<key id>"`, so dnshelper's
   history names the tenant and records no owner;
 - a zone can be assigned when its rule for dnsapi has `access: "write"`; `full` says whether it
-  covers every name and type.
+  covers every name and type;
+- as one of dnshelper's delegates, it also calls `validate-zone` (with inline fields),
+  `add-credential`, `add-zone`, `remove-zone` and `remove-credential`; dnshelper reports the zones
+  it added with `delegated: true`.
 
 ## Backup and restore
 

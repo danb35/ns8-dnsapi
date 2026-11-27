@@ -1089,8 +1089,18 @@ wraps the task events in one promise, as theirs do):
         in Redis;
       - `delegates` emptied again: 403. Removed afterwards: the PowerDNS container, the test
         zones, the tenant; the operator key revoked. Both modules were left on the branch images.
-    - Not done: the clean-up after a real crash (unit tests only), and the user guide's
-      screenshots of the tag.
+    - The clean-up after a stop, on the test node (2026-11-27): a one-shot request against the
+      throwaway PowerDNS, which was paused as soon as the journal held the credential, so that
+      the write waited; then `systemctl --user restart dnsapi.service` while the zone and the
+      credential were in dnshelper. The request ended without an answer; the restarted service's
+      first clean-up removed the zone and the credential from dnshelper, emptied the journal and
+      logged "one-shot clean-up: removed what a stopped request left". 8 of 8 checks.
+      - Seen there: dnshelper's `append-records`, still waiting for PowerDNS when the zone was
+        removed, finished once PowerDNS answered again (`result="ok"`), and saved a snapshot of
+        the zone, which dnshelper no longer managed. The record at the DNS host is what the
+        request asked for, so nothing is wrong there; the snapshot folder is an orphan that
+        dnshelper's retention ages out (`prune_orphan_snapshots`). Removed by hand on the node.
+    - Not done: the user guide's screenshots of the tag.
 
     Then phase 3 (PowerDNS hosting), as needed.
 

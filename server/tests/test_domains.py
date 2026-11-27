@@ -144,6 +144,8 @@ class DomainTest(ApiTest):
         self.assertEqual((body["dry_run"], body["valid"]), (True, True))
         self.assertEqual(self.actions(), ["validate-zone"])
         self.assertEqual(self.backend.creds, {})
+        entry = self.activity()[-1]
+        self.assertEqual((entry["action"], entry["result"], entry["provider"]), ("add-zone", "dry-run", "cloudflare"))
 
     def test_bad_credentials_store_nothing(self):
         resp, body = self.request("POST", "/v1/zones", "operator", {
@@ -400,6 +402,9 @@ class DomainTest(ApiTest):
         resp, body = self.provision()
         self.assertError(resp, body, 502, "cleanup_failed")
         self.assertIn("records were written", body["error"]["message"])
+        entry = self.activity()[-1]
+        self.assertEqual((entry["action"], entry["result"], entry["write_result"]),
+                         ("provision", "failed:cleanup_failed", "ok"))
         self.assertEqual(list(self.backend.zones), ["mail-customer.example"])
         entries = list(self.journal().values())
         self.assertEqual(entries[0]["zone"], "mail-customer.example")

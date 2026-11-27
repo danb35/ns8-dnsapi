@@ -96,6 +96,14 @@
                     "name": {
                         "type": "string",
                         "description": "The tenant's name, for tenant changes"
+                    },
+                    "provider": {
+                        "type": "string",
+                        "description": "The DNS host of a domain added through the API (add-zone, remove-zone, provision)"
+                    },
+                    "write_result": {
+                        "type": "string",
+                        "description": "provision only, when its clean-up failed: what the write itself came to"
                     }
                 }
             }

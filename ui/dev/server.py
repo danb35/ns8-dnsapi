@@ -55,6 +55,8 @@ ZONES = {
     "example.com": ("cloudflare", True),
     "internal.example.net": ("hetzner", False),
 }
+# Added by the operator's portal with the customer's credentials (POST /v1/zones).
+HOSTED = {"example.com"}
 SETTINGS = {"host": HOST, "lets_encrypt": True, "ip_allowlist": [],
             "rate_limit": 60, "publish_host_record": True, "revoke_cleartext_keys": True}
 # EXPOSED=1 shows the Status page's notice about a key revoked for being sent over plain HTTP
@@ -97,9 +99,20 @@ def seed():
         {**api, "time": stamp(3), "key": "4c1e9a07", "owner": "operator", "tenant": "t3f9a21c0",
          "action": "apply-changes", "zone": "acme-shop.com", "add": ["www A 192.0.2.20"],
          "remove": ["www A 192.0.2.10"]},
+        {**api, "time": stamp(5), "key": "4c1e9a07", "owner": "operator", "action": "update-zone",
+         "zone": "example.com", "provider": "cloudflare", "tenant": "", "result": "ok"},
         {**api, "time": stamp(9), "key": "4c1e9a07", "owner": "operator", "tenant": "t81c0d4e7",
          "action": "append-records", "zone": "bakery.example",
          "add": ["@ TXT v=spf1 include:_spf.mail.example.com ~all"], "remove": [], "result": "dry-run"},
+        {**api, "time": stamp(12), "key": "4c1e9a07", "owner": "operator", "action": "provision",
+         "zone": "corner-mail.example", "provider": "cloudflare", "result": "ok"},
+        {**api, "time": stamp(14), "key": "4c1e9a07", "owner": "operator", "tenant": "",
+         "action": "append-records", "zone": "corner-mail.example",
+         "add": ["@ TXT v=spf1 include:_spf.mail.example.com ~all"], "remove": []},
+        {**api, "time": stamp(20), "key": "4c1e9a07", "owner": "operator", "action": "add-zone",
+         "zone": "example.com", "provider": "cloudflare", "tenant": "", "result": "ok"},
+        {**api, "time": stamp(21), "key": "4c1e9a07", "owner": "operator", "action": "add-zone",
+         "zone": "example.com", "provider": "cloudflare", "tenant": "", "result": "dry-run"},
         {**api, "time": stamp(25), "key": "e06c8d51", "owner": "t5be20a93", "tenant": "t5be20a93",
          "address": "10.0.0.5", "action": "delete-records", "zone": "internal.example.net", "add": [],
          "remove": ["_acme-challenge.host1 TXT 9ihDbjYfTExAYeDs4DBUeuTo18KBzwvTEjUnSwd32-c"]},
@@ -164,7 +177,7 @@ def configure_module(data):
 
 def list_assignable_zones(data):
     return {"dnshelper": "dnshelper1", "error": None,
-            "zones": [{"zone": z, "provider": p, "tenant": tenant_of(z), "full": full}
+            "zones": [{"zone": z, "provider": p, "tenant": tenant_of(z), "full": full, "hosted": z in HOSTED}
                       for z, (p, full) in sorted(ZONES.items())]}
 
 

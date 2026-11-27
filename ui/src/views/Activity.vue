@@ -204,7 +204,11 @@ export default {
     },
     details(row) {
       const parts = [];
-      if (row.tenant && !row.zone) {
+      // a domain added through the API names its tenant beside the zone
+      const domain = ["add-zone", "update-zone", "remove-zone"].includes(
+        row.action
+      );
+      if (row.tenant && (!row.zone || domain)) {
         // the name recorded with the change, for a tenant removed since
         const known = this.tenants.some((t) => t.id === row.tenant);
         parts.push(
@@ -212,6 +216,9 @@ export default {
             ? this.tenantName(this.tenants, row.tenant)
             : row.name
         );
+      }
+      if (row.provider) {
+        parts.push(this.$t("activity.dns_host", { provider: row.provider }));
       }
       // admin entries name the key acted on as key, API entries as target_key
       const target = row.source === "admin" ? row.key : row.target_key;
